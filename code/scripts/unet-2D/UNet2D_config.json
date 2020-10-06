@@ -1,0 +1,39 @@
+{
+  "exp_name": "UNet2D_sup_02_10",
+  "path": {
+    "DATA": "../../../data/publicSegICH2D/",
+    "OUTPUT": "../../../outputs/"
+  },
+  "device": null,
+  "n_thread": 0,
+  "seed": 42,
+  "print_progress": true,
+  "split":{
+    "n_fold": 5,
+    "shuffle": true
+  },
+  "net":{
+    "depth": 5,
+    "top_filter": 32,
+    "3D": false,
+    "in_channels": 1,
+    "out_channels": 2
+  },
+  "train":{
+    "model_path_to_load": null,
+    "loss_fn": "BinaryDiceLoss",
+    "loss_fn_kwargs":{
+      "reduction": "mean"
+    },
+    "n_epoch": 150,
+    "batch_size": 64,
+    "lr": 1e-3,
+    "lr_scheduler": "ExponentialLR",
+    "lr_scheduler_kwargs": {
+      "gamma": 0.95
+    },
+    "weight_decay": 1e-6,
+    "num_workers": 8,
+    "validate_epoch": true
+  }
+}
