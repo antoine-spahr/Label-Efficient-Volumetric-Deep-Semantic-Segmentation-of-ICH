@@ -66,10 +66,9 @@ def main(config_path):
     skf = StratifiedKFold(n_splits=cfg.settings['split']['n_fold'],
                           shuffle=cfg.settings['split']['shuffle'],
                           random_state=seed)
-
     # iterate over folds and ensure that there are the same amount of ICH positive patient per fold --> Stratiffied CrossVal
     scores_list = [] # placeholder for mean test dice and IoU of each fold
-    for k, (train_idx, test_idx) in enumerate(skf.split(patient_df.PatientNumber, patient_df.Hemorrage)):
+    for k, (train_idx, test_idx) in enumerate(skf.split(patient_df.PatientNumber, patient_df.Hemorrhage)):
         # if fold results not already there
         if not os.path.exists(out_path + f'Fold_{k+1}/train_stat.json'):
             # initialize logger
@@ -103,17 +102,32 @@ def main(config_path):
             # extract train and test DataFrames + print summary (n samples positive and negatives)
             train_df = data_info_df[data_info_df.PatientNumber.isin(patient_df.loc[train_idx,'PatientNumber'].values)]
             test_df = data_info_df[data_info_df.PatientNumber.isin(patient_df.loc[test_idx,'PatientNumber'].values)]
+            # sample the dataframe to have more or less normal slices
+            df_remove = train_df[train_df.Hemorrhage == 0].sample(frac=1 - cfg.settings['dataset']['frac_negative'], random_state=seed)
+            df_pruned = train_df[~train_df.index.isin(df_remove.index)]
             logger.info('\n' + str(get_split_summary_table(data_info_df, train_df, test_df)))
 
             # Make Dataset + print online augmentation summary
-            train_dataset = public_SegICH_Dataset2D(train_df, cfg.settings['path']['DATA'], data_augmentation=True)
-            test_dataset = public_SegICH_Dataset2D(test_df, cfg.settings['path']['DATA'], data_augmentation=False)
+            train_dataset = public_SegICH_Dataset2D(train_df, cfg.settings['path']['DATA'], data_augmentation=True,
+                                                    window=(cfg.settings['data']['win_center'], cfg.settings['data']['win_width']),
+                                                    output_size=cfg.settings['data']['size'])
+            test_dataset = public_SegICH_Dataset2D(test_df, cfg.settings['path']['DATA'], data_augmentation=False,
+                                                   window=(cfg.settings['data']['win_center'], cfg.settings['data']['win_width']),
+                                                   output_size=cfg.settings['data']['size'])
+            logger.info(f"Data will be loaded from {cfg.settings['path']['DATA']}.")
+            logger.info(f"CT scans will be windowed on [{cfg.settings['data']['win_center']-cfg.settings['data']['win_width']/2} ; {cfg.settings['data']['win_center'] + cfg.settings['data']['win_width']/2}]")
+            logger.info(f"Training online data transformation: \n {str(train_dataset.transform)}")
+            logger.info(f"Evaluation online data transformation: \n {str(test_dataset.transform)}")
 
             # Make architecture (and print summmary ??)
             unet_arch = UNet(depth=cfg.settings['net']['depth'], top_filter=cfg.settings['net']['top_filter'],
                              use_3D=cfg.settings['net']['3D'], in_channels=cfg.settings['net']['in_channels'],
                              out_channels=cfg.settings['net']['out_channels'])
             unet_arch.to(cfg.settings['device'])
+            logger.info(f"U-Net2D initialized with a depth of {cfg.settings['net']['depth']},"
+                        f" a number of initial filter of {cfg.settings['net']['top_filter']},"
+                        f" {cfg.settings['net']['in_channels']} as input channels and {cfg.settings['net']['out_channels']} as output channels.")
+            logger.info(f"The U-Net2D has {sum(p.numel() for p in unet_arch.parameters())} parameters.")
 
             # Make model
             unet2D = UNet2D(unet_arch)
@@ -128,16 +142,17 @@ def main(config_path):
                     unet2D.load_model(model_path, map_location=cfg.settings['device'])
                 else:
                     raise ValueError(f'Model path to load type not understood.')
-                logger.info(f"2D U-Net model Loaded from {model_path}")
+                logger.info(f"2D U-Net model loaded from {model_path}")
 
             # print Training parameters
             train_params = []
             for key, value in cfg.settings['train'].items():
                 train_params.append(f"--> {key} : {value}")
-            logger.info('Training parameters:\n\t' + '\n\t'.join(train_params))
+            logger.info('Training settings:\n\t' + '\n\t'.join(train_params))
 
             # Train model
-            unet2D.train(train_dataset, valid_dataset=test_dataset, checkpoint_path=out_path + f'Fold_{k+1}/checkpoint_path.pt',
+            eval_dataset = test_dataset if cfg.settings['train']['validate_epoch'] else None
+            unet2D.train(train_dataset, valid_dataset=eval_dataset, checkpoint_path=out_path + f'Fold_{k+1}/checkpoint_path.pt',
                          n_epoch=cfg.settings['train']['n_epoch'], batch_size=cfg.settings['train']['batch_size'],
                          lr=cfg.settings['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg.settings['train']['lr_scheduler']),
                          lr_scheduler_kwargs=cfg.settings['train']['lr_scheduler_kwargs'], loss_fn=global()[cfg.settings['train']['loss_fn']],

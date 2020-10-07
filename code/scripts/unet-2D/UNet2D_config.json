@@ -1,5 +1,5 @@
 {
-  "exp_name": "UNet2D_sup_02_10",
+  "exp_name": "UNet2D_sup_06_10",
   "path": {
     "DATA": "../../../data/publicSegICH2D/",
     "OUTPUT": "../../../outputs/"
@@ -8,6 +8,14 @@
   "n_thread": 0,
   "seed": 42,
   "print_progress": true,
+  "data":{
+    "win_center": 0,
+    "win_width": 500,
+    "size": 256
+  },
+  "dataset":{
+    "frac_negative": 0.5
+  },
   "split":{
     "n_fold": 5,
     "shuffle": true
@@ -26,14 +34,14 @@
       "reduction": "mean"
     },
     "n_epoch": 150,
-    "batch_size": 64,
+    "batch_size": 16,
     "lr": 1e-3,
     "lr_scheduler": "ExponentialLR",
     "lr_scheduler_kwargs": {
-      "gamma": 0.95
+      "gamma": 0.96
     },
     "weight_decay": 1e-6,
-    "num_workers": 8,
+    "num_workers": 4,
     "validate_epoch": true
   }
 }

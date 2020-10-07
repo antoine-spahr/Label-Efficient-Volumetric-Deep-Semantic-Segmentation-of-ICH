@@ -56,6 +56,48 @@ class Compose:
         link = '\n' + '|'.center(max_size) + '\n' + 'V'.center(max_size) + '\n'
         return link.join([t.center(max_size) for t in tf_names])
 
+class RandomZCrop:
+    """
+    Randomly crop the 3D image and mask along the z-dimension.
+    """
+    def __init__(self, Z=64):
+        """
+        Build a to random Z-crop transform.
+        ----------
+        INPUT
+            |---- Z (int) the number of slice to take along z.
+        OUTPUT
+            |---- RandomZCrop transform.
+        """
+        self.Z = Z
+
+    def __call__(self, image, mask):
+        """
+        Randomly crop the np.array image and mask along Z.
+        ----------
+        INPUT
+            |---- image (3D np.array) the image to crop.
+            |---- mask (3D np.array) the mask to crop.
+        OUTPUT
+            |---- image (3D np.array) the cropped image.
+            |---- mask (3D np.array) the cropped mask.
+        """
+        assert image.ndim == 3 and mask.ndim == 3, 'Input must be 3D numpy arrays!'
+        assert image.shape[2] > self.Z, f'Input image z-dimension ({image.shape[2]}) must be larger that the crop size {self.Z}.'
+        assert mask.shape[2] > self.Z, f'Input mask z-dimension ({mask.shape[2]}) must be larger that the crop size {self.Z}.'
+
+        z_idx = np.random.randint(0, image.shape[2] - self.Z)
+        image = image[:, :, z_idx:z_idx+self.Z]
+        mask = mask[:, :, z_idx:z_idx+self.Z]
+
+        return image, mask
+
+    def __str__(self):
+        """
+        Transform printing format
+        """
+        return f"RandomZCrop(Z={self.Z})"
+
 class Resize:
     """
     Resize the image and mask to the given height and width.
@@ -84,9 +126,8 @@ class Resize:
             |---- image (np.array) the converted image.
             |---- mask (np.array) the converted mask.
         """
-        image = skimage.transform.resize(image, (self.H, self.W, *image.shape[2:]), order=1)
+        image = skimage.transform.resize(image, (self.H, self.W, *image.shape[2:]), order=1)#, cval=image.min())
         mask = skimage.transform.resize(mask, (self.H, self.W, *mask.shape[2:]), order=0, preserve_range=True)
-
         return image, mask
 
     def __str__(self):
@@ -128,7 +169,7 @@ class Translate:
                  np.random.uniform(low=image.shape[1]*self.low, high=image.shape[1]*self.high)]
         shift += [0] * (image.ndim - 2)
 
-        image = scipy.ndimage.shift(image, shift, order=3)
+        image = scipy.ndimage.shift(image, shift, order=3)#, cval=image.min())
         mask = scipy.ndimage.shift(mask, shift, order=0)
 
         return image, mask
@@ -180,12 +221,11 @@ class Scale:
                        (int(np.floor(adjust_w)), int(np.ceil(adjust_w)))] + [(0,0)] * (image.ndim - 2)
 
         if scale_factor >= 1:
-            adjust_fn = skimage.util.crop
+            image = skimage.util.crop(scipy.ndimage.zoom(image, scales, order=3), adjust_list)
+            mask = skimage.util.crop(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
         else:
-            adjust_fn = skimage.util.pad
-
-        image = adjust_fn(scipy.ndimage.zoom(image, scales, order=3), adjust_list)
-        mask = adjust_fn(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
+            image = skimage.util.pad(scipy.ndimage.zoom(image, scales, order=3), adjust_list)#, constant_values=image.min())
+            mask = skimage.util.pad(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
 
         return image, mask
 
@@ -226,7 +266,7 @@ class Rotate:
         # randomly sample an angle
         angle = np.random.uniform(low=self.low, high=self.high)
 
-        image = scipy.ndimage.rotate(image, angle, axes=(1,0), order=3, reshape=False)
+        image = scipy.ndimage.rotate(image, angle, axes=(1,0), order=3, reshape=False)#, cval=image.min())
         mask = scipy.ndimage.rotate(mask, angle, axes=(1,0), order=0, reshape=False)
 
         return image, mask
@@ -303,7 +343,7 @@ class ToTorchTensor:
         """
         image = torch.from_numpy(image).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(image)
         mask = torch.from_numpy(mask).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(mask)
-        return image, mask
+        return image, mask.bool()
 
     def __str__(self):
         """

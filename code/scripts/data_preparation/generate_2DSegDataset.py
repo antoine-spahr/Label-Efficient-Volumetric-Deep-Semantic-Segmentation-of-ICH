@@ -23,9 +23,10 @@ from src.utils.print_utils import print_progessbar
 @click.command()
 @click.argument('input_data_path', type=click.Path(exists=True))
 @click.option('--output_data_path', type=click.Path(exists=False), default=None, help='Where to save the 2D data.')
-def main(input_data_path, output_data_path):
+@click.option('--window', type=tuple, default=None, help='The windowing center and width as a tuple for CT intensity rescaling. Default: None. (Windowing not applied)')
+def main(input_data_path, output_data_path, window):
     """
-    Convert the Volumetric CT data and mask (in NIfTI format) to a dataset of 2D images and mask in png.
+    Convert the Volumetric CT data and mask (in NIfTI format) to a dataset of 2D images in tif and masks in bitmap.
     """
     # open data info dataframe
     info_df = pd.read_csv(input_data_path + 'hemorrhage_diagnosis_raw_ct.csv')
@@ -38,25 +39,26 @@ def main(input_data_path, output_data_path):
                                     'Unnamed: 2':'Gender', 'Unnamed: 8':'Fracture', 'Unnamed: 9':'Note'})
     patient_df[patient_df.columns[3:9]] = patient_df[patient_df.columns[3:9]].fillna(0).astype(int)
     # add columns Hemorrgae (any ICH)
-    patient_df['Hemorrage'] = patient_df[patient_df.columns[3:8]].max(axis=1)
+    patient_df['Hemorrhage'] = patient_df[patient_df.columns[3:8]].max(axis=1)
 
     # make patient directory
     if not os.path.exists(output_data_path): os.mkdir(output_data_path)
     if not os.path.exists(output_data_path + 'Patient_CT/'): os.mkdir(output_data_path + 'Patient_CT/')
     # iterate over volume to extract data
     output_info = []
-    for n, id in enumerate(info_df.PatientNumber.unique()):#id, slice in zip(info_df.PatientNumber.values, info_df.SliceNumber.values):
+    for n, id in enumerate(info_df.PatientNumber.unique()):
         # read nii volume
         ct_nii = nib.load(input_data_path + f'ct_scans/{id:03}.nii')
         mask_nii = nib.load(input_data_path + f'masks/{id:03}.nii')
         # get np.array
         ct_vol = ct_nii.get_fdata()
         mask_vol = skimage.img_as_bool(mask_nii.get_fdata())
-        # rotate 90° counter clockwise
+        # rotate 90° counter clockwise for head pointing upward
         ct_vol = np.rot90(ct_vol, axes=(0,1))
         mask_vol = np.rot90(mask_vol, axes=(0,1))
         # window the ct volume to get better contrast of soft tissues
-        ct_vol = window_ct(ct_vol, win_center=40, win_width=120, out_range=(0,1))
+        if window is not None:
+            ct_vol = window_ct(ct_vol, win_center=window[0], win_width=window[1], out_range=(0,1))
 
         if mask_vol.shape != ct_vol.shape:
             print(f'>>> Warning! The ct volume of patient {id} does not have '
@@ -65,17 +67,18 @@ def main(input_data_path, output_data_path):
         if not os.path.exists(output_data_path + f'Patient_CT/{id:03}/'): os.mkdir(output_data_path + f'Patient_CT/{id:03}/')
         # iterate over slices to save slices
         for i, slice in enumerate(range(ct_vol.shape[2])):
-            ct_slice_fn =f'Patient_CT/{id:03}/{slice+1}.png'
+            ct_slice_fn =f'Patient_CT/{id:03}/{slice+1}.tif'
             # save CT slice
-            skimage.io.imsave(output_data_path + ct_slice_fn, skimage.img_as_uint(ct_vol[:,:,slice]), check_contrast=False)
+            skimage.io.imsave(output_data_path + ct_slice_fn, ct_vol[:,:,slice], check_contrast=False)
+            is_low = True if skimage.exposure.is_low_contrast(ct_vol[:,:,slice]) else False
             # save mask if some positive ICH
             if np.any(mask_vol[:,:,slice]):
-                mask_slice_fn = f'Patient_CT/{id:03}/{slice+1}_HGE_Seg.png'
-                skimage.io.imsave(output_data_path + mask_slice_fn, skimage.img_as_uint(mask_vol[:,:,slice]), check_contrast=False)
+                mask_slice_fn = f'Patient_CT/{id:03}/{slice+1}_ICH_Seg.bmp'
+                skimage.io.imsave(output_data_path + mask_slice_fn, skimage.img_as_ubyte(mask_vol[:,:,slice]), check_contrast=False)
             else:
                 mask_slice_fn = 'None'
             # add info to output list
-            output_info.append({'PatientNumber':id, 'SliceNumber':slice+1, 'CT_fn':ct_slice_fn, 'mask_fn':mask_slice_fn})
+            output_info.append({'PatientNumber':id, 'SliceNumber':slice+1, 'CT_fn':ct_slice_fn, 'mask_fn':mask_slice_fn, 'low_contrast_CT':is_low})
 
             print_progessbar(i, ct_vol.shape[2], Name=f'Patient {id:03} {n+1:03}/{len(info_df.PatientNumber.unique()):03}',
                              Size=20, erase=False)
@@ -90,7 +93,6 @@ def main(input_data_path, output_data_path):
     # save patient df
     patient_df.to_csv(output_data_path + 'patient_info.csv')
     print('>>> Patient informations saved at ' + output_data_path + 'patient_info.csv')
-
 
 if __name__ == '__main__':
     main()
