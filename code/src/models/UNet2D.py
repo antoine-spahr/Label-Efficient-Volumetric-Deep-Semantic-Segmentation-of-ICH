@@ -11,7 +11,7 @@ import torch
 import json
 
 from src.models.optim.UNet2D_trainer import UNet2D_trainer
-from src.models.optim.loss_functions.DiceLoss import BinaryDiceLoss
+from src.models.optim.LossFunctions import BinaryDiceLoss
 
 class UNet2D:
     """

@@ -1,5 +1,5 @@
 {
-  "exp_name": "UNet2D_sup_06_10",
+  "exp_name": "UNet2D_06_10_all_input_win500",
   "path": {
     "DATA": "../../../data/publicSegICH2D/",
     "OUTPUT": "../../../outputs/"
@@ -14,7 +14,7 @@
     "size": 256
   },
   "dataset":{
-    "frac_negative": 0.5
+    "frac_negative": 1
   },
   "split":{
     "n_fold": 5,
@@ -25,16 +25,18 @@
     "top_filter": 32,
     "3D": false,
     "in_channels": 1,
-    "out_channels": 2
+    "out_channels": 1,
+    "bilinear": false
   },
   "train":{
     "model_path_to_load": null,
     "loss_fn": "BinaryDiceLoss",
     "loss_fn_kwargs":{
-      "reduction": "mean"
+      "reduction": "mean",
+      "p":1
     },
-    "n_epoch": 150,
-    "batch_size": 16,
+    "n_epoch": 50,
+    "batch_size": 32,
     "lr": 1e-3,
     "lr_scheduler": "ExponentialLR",
     "lr_scheduler_kwargs": {

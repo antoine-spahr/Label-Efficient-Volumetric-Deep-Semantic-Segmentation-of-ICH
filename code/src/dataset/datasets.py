@@ -76,18 +76,18 @@ class public_SegICH_Dataset2D(data.Dataset):
             |---- slice_nbr (torch.tensor) the slice number as a single value.
         """
         # load image
-        slice = io.imread(self.data_path + self.data_df.loc[idx, 'CT_fn'])
+        slice = io.imread(self.data_path + self.data_df.iloc[idx].CT_fn)
         if self.window:
             slice = window_ct(slice, win_center=self.window[0], win_width=self.window[1], out_range=(0,1))
         # load mask if one, else make a blank array
-        if self.data_df.loc[idx, 'mask_fn'] == 'None':
+        if self.data_df.iloc[idx].mask_fn == 'None':
             mask = np.zeros_like(slice)
         else:
-            mask = io.imread(self.data_path + self.data_df.loc[idx, 'mask_fn'])
+            mask = io.imread(self.data_path + self.data_df.iloc[idx].mask_fn)
         # get the patient id
-        patient_nbr = torch.tensor(self.data_df.loc[idx, 'PatientNumber'])
+        patient_nbr = torch.tensor(self.data_df.iloc[idx].PatientNumber)
         # get slice number
-        slice_nbr = torch.tensor(self.data_df.loc[idx, 'SliceNumber'])
+        slice_nbr = torch.tensor(self.data_df.iloc[idx].SliceNumber)
 
         # Apply the transform : Data Augmentation + image formating
         slice, mask = self.transform(slice, mask)

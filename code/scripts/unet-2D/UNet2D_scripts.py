@@ -6,7 +6,6 @@ date : 01.10.2020
 ----------
 
 TO DO :
-- test if works
 - add a summary print of architecture
 """
 import sys
@@ -26,7 +25,8 @@ from  sklearn.model_selection import StratifiedKFold
 from src.utils.Config import Config
 from src.models.UNet2D import UNet2D
 from src.dataset.datasets import public_SegICH_Dataset2D
-from src.models.optim.loss_functions.DiceLoss import BinaryDiceLoss
+from src.models.optim.LossFunctions import BinaryDiceLoss
+import src.models.optim.LossFunctions
 from src.models.networks.UNet import UNet
 
 @click.command()
@@ -104,7 +104,7 @@ def main(config_path):
             test_df = data_info_df[data_info_df.PatientNumber.isin(patient_df.loc[test_idx,'PatientNumber'].values)]
             # sample the dataframe to have more or less normal slices
             df_remove = train_df[train_df.Hemorrhage == 0].sample(frac=1 - cfg.settings['dataset']['frac_negative'], random_state=seed)
-            df_pruned = train_df[~train_df.index.isin(df_remove.index)]
+            train_df = train_df[~train_df.index.isin(df_remove.index)]
             logger.info('\n' + str(get_split_summary_table(data_info_df, train_df, test_df)))
 
             # Make Dataset + print online augmentation summary
@@ -116,17 +116,18 @@ def main(config_path):
                                                    output_size=cfg.settings['data']['size'])
             logger.info(f"Data will be loaded from {cfg.settings['path']['DATA']}.")
             logger.info(f"CT scans will be windowed on [{cfg.settings['data']['win_center']-cfg.settings['data']['win_width']/2} ; {cfg.settings['data']['win_center'] + cfg.settings['data']['win_width']/2}]")
-            logger.info(f"Training online data transformation: \n {str(train_dataset.transform)}")
-            logger.info(f"Evaluation online data transformation: \n {str(test_dataset.transform)}")
+            logger.info(f"Training online data transformation: \n\n {str(train_dataset.transform)}\n")
+            logger.info(f"Evaluation online data transformation: \n\n {str(test_dataset.transform)}\n")
 
             # Make architecture (and print summmary ??)
             unet_arch = UNet(depth=cfg.settings['net']['depth'], top_filter=cfg.settings['net']['top_filter'],
                              use_3D=cfg.settings['net']['3D'], in_channels=cfg.settings['net']['in_channels'],
-                             out_channels=cfg.settings['net']['out_channels'])
+                             out_channels=cfg.settings['net']['out_channels'], bilinear=cfg.settings['net']['bilinear'])
             unet_arch.to(cfg.settings['device'])
-            logger.info(f"U-Net2D initialized with a depth of {cfg.settings['net']['depth']},"
-                        f" a number of initial filter of {cfg.settings['net']['top_filter']},"
-                        f" {cfg.settings['net']['in_channels']} as input channels and {cfg.settings['net']['out_channels']} as output channels.")
+            logger.info(f"U-Net2D initialized with a depth of {cfg.settings['net']['depth']}"
+                        f" and a number of initial filter of {cfg.settings['net']['top_filter']},")
+            logger.info(f"Reconstruction performed with {'Upsample + Conv' if cfg.settings['net']['bilinear'] else 'ConvTranspose'}.")
+            logger.info(f"U-Net2D takes {cfg.settings['net']['in_channels']} as input channels and {cfg.settings['net']['out_channels']} as output channels.")
             logger.info(f"The U-Net2D has {sum(p.numel() for p in unet_arch.parameters())} parameters.")
 
             # Make model
@@ -155,7 +156,7 @@ def main(config_path):
             unet2D.train(train_dataset, valid_dataset=eval_dataset, checkpoint_path=out_path + f'Fold_{k+1}/checkpoint_path.pt',
                          n_epoch=cfg.settings['train']['n_epoch'], batch_size=cfg.settings['train']['batch_size'],
                          lr=cfg.settings['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg.settings['train']['lr_scheduler']),
-                         lr_scheduler_kwargs=cfg.settings['train']['lr_scheduler_kwargs'], loss_fn=global()[cfg.settings['train']['loss_fn']],
+                         lr_scheduler_kwargs=cfg.settings['train']['lr_scheduler_kwargs'], loss_fn=getattr(src.models.optim.LossFunctions, cfg.settings['train']['loss_fn']),#global()[cfg.settings['train']['loss_fn']],
                          loss_fn_kwargs=cfg.settings['train']['loss_fn_kwargs'], weight_decay=cfg.settings['train']['weight_decay'],
                          num_workers=cfg.settings['train']['num_workers'], device=cfg.settings['device'],
                          print_progress=cfg.settings['print_progress'])
@@ -168,8 +169,8 @@ def main(config_path):
             # Save models & train_stats
             unet2D.save_model(out_path + f'Fold_{k+1}/trained_unet.pt')
             logger.info("Trained U-Net saved at " + out_path + f"Fold_{k+1}/trained_unet.pt")
-            unet2D.save_train_stat(out_path + f'Fold_{k+1}/train_stat.pt')
-            logger.info("Trained statistics saved at " + out_path + f"Fold_{k+1}/train_stat.pt")
+            unet2D.save_train_stat(out_path + f'Fold_{k+1}/train_stat.json')
+            logger.info("Trained statistics saved at " + out_path + f"Fold_{k+1}/train_stat.json")
 
             # append avergae dice/IoU to list
             scores_list.append([unet2D.train_stat['eval']['dice'], unet2D.train_stat['eval']['IoU']])

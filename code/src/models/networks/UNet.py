@@ -17,7 +17,7 @@ class UNet(nn.Module):
     """
     U-Net model as a Pytorch nn.Module. The class enables to build 2D and 3D U-Nets with different depth.
     """
-    def __init__(self, depth=5, use_3D=False, bilinear=False, in_channels=1, out_channels=2, top_filter=64):
+    def __init__(self, depth=5, use_3D=False, bilinear=False, in_channels=1, out_channels=1, top_filter=64):
         """
         Build a 2D or 3D U-Net Module.
         ----------
@@ -62,7 +62,10 @@ class UNet(nn.Module):
         self.downpool = nn.MaxPool3d(kernel_size=2, stride=2) if use_3D else nn.MaxPool2d(kernel_size=2, stride=2)
         # define the final convolution (1x1(x1)) convolution follow by a sigmoid.
         self.final_conv = nn.Conv3d(top_filter, out_channels, kernel_size=1) if use_3D else nn.Conv2d(top_filter, out_channels, kernel_size=1)
-        self.final_activation = nn.Sigmoid()
+        if out_channels > 1:
+            self.final_activation = nn.Softmax(dim=1) # Softmax along output channels for multiclass predictions
+        else:
+            self.final_activation = nn.Sigmoid() # Sigmoid for logit
 
     def forward(self, input):
         """
