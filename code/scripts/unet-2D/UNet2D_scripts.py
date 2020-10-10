@@ -173,7 +173,8 @@ def main(config_path):
             logger.info("Trained statistics saved at " + out_path + f"Fold_{k+1}/train_stat.json")
 
             # append avergae dice/IoU to list
-            scores_list.append([unet2D.train_stat['eval']['dice'], unet2D.train_stat['eval']['IoU']])
+            scores_list.append([unet2D.train_stat['eval']['dice']['all'], unet2D.train_stat['eval']['IoU']['all'],
+                                unet2D.train_stat['eval']['dice']['ICH'], unet2D.train_stat['eval']['IoU']['ICH']])
 
     # save mean +/- 1.96 std Dice and IoU in .txt file
     means = np.array(scores_list).mean(axis=0)
@@ -181,6 +182,13 @@ def main(config_path):
     with open(out_path + 'average_scores.txt', 'w') as f:
         f.write(f'Dice = {means[0]} +/- {CI95[0]}\n')
         f.write(f'IoU = {means[1]} +/- {CI95[1]}\n\n')
+        f.write(f'Dice (ICH) = {means[2]} +/- {CI95[2]}\n')
+        f.write(f'IoU (ICH) = {means[3]} +/- {CI95[3]}\n\n')
+
+    # generate dataframe of all prediction
+    df_list = [pd.read_csv(out_path + f'Fold_{i+1}/pred/volume_prediction_scores.csv') for i in range(cfg.settings['split']['n_fold'])]
+    all_df = pd.concat(df_list, axis=0).reset_index(drop=True)
+    all_df.to_csv(out_path + 'all_volume_prediction.csv')
 
     # Save config file
     cfg.settings['device'] = str(cfg.settings['device'])

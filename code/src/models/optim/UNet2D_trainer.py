@@ -147,10 +147,10 @@ class UNet2D_trainer:
                     print_progessbar(b, n_batch, Name='\t\tTrain Batch', Size=40, erase=True)
 
             # Get validation performance if required
-            valid_dice, dice, IoU = '', None, None
+            valid_dice, dice, IoU, dice_ICH, IoU_ICH = '', None, None, None, None
             if valid_dataset:
-                dice, IoU = self.evaluate(net, valid_dataset, return_score=True, print_to_logger=False, save_path=None)
-                valid_dice = f'| Valid ICH Dice: {dice:.5f} | Valid ICH IoU: {IoU:.5f} '
+                dice, IoU, dice_ICH, IoU_ICH = self.evaluate(net, valid_dataset, return_score=True, print_to_logger=False, save_path=None)
+                valid_dice = f'| Valid Dice: {dice:.5f} | Valid IoU: {IoU:.5f} | Valid ICH Dice: {dice_ICH:.5f} | Valid ICH IoU: {IoU_ICH:.5f} '
 
             # log the epoch statistics
             logger.info(f'\t| Epoch: {epoch + 1:03}/{self.n_epoch:03} '
@@ -158,7 +158,7 @@ class UNet2D_trainer:
                         f'| Train Loss: {epoch_loss / n_batch:.6f} ' + valid_dice +
                         f'| lr: {scheduler.get_last_lr()[0]:.7f} |')
             # Store epoch loss and epoch dice
-            epoch_loss_list.append([epoch+1, epoch_loss/n_batch, dice])
+            epoch_loss_list.append([epoch+1, epoch_loss/n_batch, dice, IoU, dice_ICH, IoU_ICH])
 
             # update scheduler
             scheduler.step()
@@ -196,6 +196,8 @@ class UNet2D_trainer:
         OUTPUT
             |---- (Dice) (float) the average Dice coefficient for the 3D segemntation.
             |---- (IoU) (flaot) the average IoU coefficient for the 3D segementation.
+            |---- (Dice_ICH) (float) the average Dice coefficient for the 3D segmentation of ICH patient only.
+            |---- (IoU_ICH) (float) the average IoU coefficient for the 3D segmentation of ICH patient only.
         """
         if print_to_logger:
             logger = logging.getLogger()
@@ -233,11 +235,11 @@ class UNet2D_trainer:
                         io.imsave(f'{save_path}/{id}/{s_nbr}.bmp', pred_samp[0,:,:].cpu().numpy().astype(np.uint8)*255, check_contrast=False) # image are binary --> put in uint8 and scale to 255
                         pred_path.append(f'{id}/{s_nbr}.bmp') # file name with patient and slice number
                 else:
-                    pred_path = ['']*pID.shape[0]
+                    pred_path = ['-']*pID.shape[0]
                 # add data to placeholder
                 id_pred['PatientID'] += pID.cpu().tolist()
                 id_pred['Slice'] += slice_nbr.cpu().tolist()
-                id_pred['ICH'] += target.view(target.shape[0], -1).max(dim=1) # 1 if mask has some ICH, else 0
+                id_pred['ICH'] += target.view(target.shape[0], -1).max(dim=1)[0].cpu().tolist() # 1 if mask has some ICH, else 0
                 id_pred['TP'] += tp.cpu().tolist()
                 id_pred['TN'] += tn.cpu().tolist()
                 id_pred['FP'] += fp.cpu().tolist()
@@ -263,17 +265,20 @@ class UNet2D_trainer:
         if save_path:
             result_3D_df.to_csv(f'{save_path}/volume_prediction_scores.csv')
 
-        # take average over ICH-positive patient only
-        avg_results = result_3D_df[result_3D_df.ICH == 1, ['Dice', 'IoU']].mean(axis=0)
+        # take average over ICH-positive patient only and all together
+        avg_results_ICH = result_3D_df.loc[result_3D_df.ICH == 1, ['Dice', 'IoU']].mean(axis=0)
+        avg_results = result_3D_df[['Dice', 'IoU']].mean(axis=0)
         self.eval_time = time.time() - start_time
-        self.eval_dice = avg_results.Dice
-        self.eval_IoU = avg_results.IoU
+        self.eval_dice = {'all':avg_results.Dice, 'ICH':avg_results_ICH.Dice}
+        self.eval_IoU = {'all':avg_results.IoU, 'ICH':avg_results_ICH.IoU}
 
         if print_to_logger:
             logger.info(f'Evaluation time: {str(timedelta(seconds=self.eval_time)):0>8}')
-            logger.info(f'Evaluation Dice: {self.eval_dice:.5f}.')
-            logger.info(f'Evaluation IoU: {self.eval_IoU:.5f}.')
-            logger.info('Finished evaluating the U-Net 2D.')
+            logger.info(f"Evaluation Dice: {self.eval_dice['all']:.5f}.")
+            logger.info(f"Evaluation IoU: {self.eval_IoU['all']:.5f}.")
+            logger.info(f"Evaluation Dice (ICH only): {self.eval_dice['ICH']:.5f}.")
+            logger.info(f"Evaluation IoU (ICH only): {self.eval_IoU['ICH']:.5f}.")
+            logger.info("Finished evaluating the U-Net 2D.")
 
         if return_score:
-            return avg_results.Dice, avg_results.IoU
+            return avg_results.Dice, avg_results.IoU, avg_results_ICH.Dice, avg_results_ICH.IoU

@@ -36,7 +36,7 @@
       "p":1
     },
     "n_epoch": 50,
-    "batch_size": 32,
+    "batch_size": 16,
     "lr": 1e-3,
     "lr_scheduler": "ExponentialLR",
     "lr_scheduler_kwargs": {
