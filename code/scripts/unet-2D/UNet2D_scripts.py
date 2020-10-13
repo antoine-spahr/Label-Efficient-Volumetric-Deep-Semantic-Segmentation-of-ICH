@@ -28,6 +28,7 @@ from src.dataset.datasets import public_SegICH_Dataset2D
 from src.models.optim.LossFunctions import BinaryDiceLoss
 import src.models.optim.LossFunctions
 from src.models.networks.UNet import UNet
+from src.postprocessing.analyse_exp import analyse_supervised_exp
 
 @click.command()
 @click.argument('config_path', type=click.Path(exists=True))
@@ -184,16 +185,22 @@ def main(config_path):
         f.write(f'IoU = {means[1]} +/- {CI95[1]}\n\n')
         f.write(f'Dice (ICH) = {means[2]} +/- {CI95[2]}\n')
         f.write(f'IoU (ICH) = {means[3]} +/- {CI95[3]}\n\n')
+    logger.info('Average Scores saved at ' + out_path + 'average_scores.txt')
 
     # generate dataframe of all prediction
     df_list = [pd.read_csv(out_path + f'Fold_{i+1}/pred/volume_prediction_scores.csv') for i in range(cfg.settings['split']['n_fold'])]
     all_df = pd.concat(df_list, axis=0).reset_index(drop=True)
     all_df.to_csv(out_path + 'all_volume_prediction.csv')
+    logger.info('CSV of all volumes prediction saved at ' + out_path + 'all_volume_prediction.csv')
 
     # Save config file
     cfg.settings['device'] = str(cfg.settings['device'])
     cfg.save_config(out_path + 'config.json')
     logger.info("Config file saved at " + out_path + "config.json")
+
+    # Analyse results
+    analyse_supervised_exp(out_path, cfg.settings['path']['DATA'], out_path + 'results_overview.pdf')
+    logger.info('Results overview figure saved at ' + out_path + 'results_overview.pdf')
 
 def get_split_summary_table(all_df, train_df, test_df):
     """
