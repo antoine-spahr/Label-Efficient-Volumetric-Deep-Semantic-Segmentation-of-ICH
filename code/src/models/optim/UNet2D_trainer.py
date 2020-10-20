@@ -20,7 +20,6 @@ import logging
 import os
 from datetime import timedelta
 
-#from sklearn.metrics import confusion_matrix
 from src.models.optim.LossFunctions import BinaryDiceLoss
 from src.utils.tensor_utils import batch_binary_confusion_matrix
 from src.utils.print_utils import print_progessbar
@@ -95,7 +94,10 @@ class UNet2D_trainer:
         net = net.to(self.device)
 
         # define optimizer
-        optimizer = torch.optim.Adam(net.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        optimizer = optim.Adam(net.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+        # define the lr scheduler
+        scheduler = self.lr_scheduler(optimizer, **self.lr_scheduler_kwargs)
 
         # Load checkpoint if present
         try:
@@ -103,15 +105,13 @@ class UNet2D_trainer:
             n_epoch_finished = checkpoint['n_epoch_finished']
             net.load_state_dict(checkpoint['net_state'])
             optimizer.load_state_dict(checkpoint['optimizer_state'])
+            scheduler.load_state_dict(checkpoint['lr_state'])
             epoch_loss_list = checkpoint['loss_evolution']
             logger.info(f'Checkpoint loaded with {n_epoch_finished} epoch finished.')
         except FileNotFoundError:
-            logger.info('No Checkpoint found. Training from begining.')
+            logger.info('No Checkpoint found. Training from beginning.')
             n_epoch_finished = 0
             epoch_loss_list = [] # Placeholder for epoch evolution
-
-        # define the lr scheduler
-        scheduler = self.lr_scheduler(optimizer, **self.lr_scheduler_kwargs)
 
         # define the loss function
         loss_fn = self.loss_fn(**self.loss_fn_kwargs)
@@ -168,6 +168,7 @@ class UNet2D_trainer:
                 checkpoint = {'n_epoch_finished': epoch+1,
                               'net_state': net.state_dict(),
                               'optimizer_state': optimizer.state_dict(),
+                              'lr_state': scheduler.state_dict(),
                               'loss_evolution': epoch_loss_list}
                 torch.save(checkpoint, checkpoint_path)
                 logger.info('\tCheckpoint saved.')

@@ -80,7 +80,8 @@ def pred2GIF(img_list, mask_list, out_filename, fps=2, mask_color='xkcd:vermilli
         # plot frame
         ax.imshow(img, cmap='gray', aspect='equal')
         mask = skimage.img_as_bool(mask)
-        ax.imshow(np.ma.masked_where(mask == False, mask), cmap=matplotlib.colors.ListedColormap([mask_color, 'white']), alpha=.8, aspect='equal')
+        if np.any(mask):
+            ax.imshow(np.ma.masked_where(mask == False, mask), cmap=matplotlib.colors.ListedColormap([mask_color, 'white']), alpha=.8, aspect='equal')
         ax.set_axis_off()
 
         fig.tight_layout(pad=0)
@@ -95,8 +96,8 @@ def pred2GIF(img_list, mask_list, out_filename, fps=2, mask_color='xkcd:vermilli
     # make the gif
     imageio.mimsave(out_filename, output_list, fps=fps)
 
-def curve_std(data, serie_names, colors=None, ax=None, lw=1, CI_alpha=0.25, plot_rep=False,
-              plot_mean=True, plot_CI=True, legend=True, legend_kwargs=None, fontsize=12):
+def curve_std(data, serie_names, colors=None, ax=None, lw=1, CI_alpha=0.25, rep_alpha=0.5,
+              plot_rep=False, plot_mean=True, plot_CI=True, legend=True, legend_kwargs=None, fontsize=12):
     """
     Plot the curve evolutions for all the replicate in list of results, as well as
     the 95% confidence interval (CI) of the mean curve evolution.
@@ -112,6 +113,7 @@ def curve_std(data, serie_names, colors=None, ax=None, lw=1, CI_alpha=0.25, plot
         |---- ax (matplotlib.Axes) the axes where to plot.
         |---- lw (int) the line width.
         |---- CI_alpha (float) the transparency of the CI.
+        |---- rep_alpha (float) the transparancy of replicate lines.
         |---- plot_rep (bool) whether to plot all the replicate lines.
         |---- plot_mean (bool) whether to plot the mean curve evolution.
         |---- plot_CI (bool) whether to plot the confidence interval.
@@ -138,7 +140,7 @@ def curve_std(data, serie_names, colors=None, ax=None, lw=1, CI_alpha=0.25, plot
         if plot_rep:
             for rep_i in range(y_data.shape[1]):
                 lab = name if rep_i == y_data.shape[1] - 1 else None
-                ax.plot(x_data, y_data[:,rep_i], color=color, lw=lw, label=lab)
+                ax.plot(x_data, y_data[:,rep_i], color=color, lw=lw, label=lab, alpha=rep_alpha)
         # plot CI
         if plot_CI:
             ax.fill_between(x_data, y_data.mean(axis=1) + 1.96*y_data.std(axis=1),

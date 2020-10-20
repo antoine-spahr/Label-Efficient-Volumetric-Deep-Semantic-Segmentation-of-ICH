@@ -6,8 +6,10 @@ date : 28.09.2020
 ----------
 
 TO DO :
-- check if use of validation set to keep best model ?
-- adjust data unpacking depending on dataset we have ! <-- OK
+- adapt validation to 3D
+- enable patch
+- check results saving as .nii --> what affine needed ?
+- save also original masl with given resamping ?
 """
 
 import torch
@@ -18,6 +20,7 @@ import pandas as pd
 import PIL.Image
 import time
 import logging
+import nibabel as nib
 
 from sklearn.metrics import confusion_matrix
 
@@ -26,17 +29,15 @@ from src.utils.print_utils import print_progessbar
 
 class UNet_trainer:
     """
-    Utility class to train and evaluate a 2D or 3D UNet architecture. The evaluation mehtod compute the performances
-    (Dice and IoU) for the 3D predictions.
+    Utility class to train and evaluate a D UNet architecture.
     """
-    def __init__(self, use_3D, n_epoch=150, batch_size=16, lr=1e-3, lr_scheduler=optim.lr_scheduler.MultiplicativeLR,
+    def __init__(self, n_epoch=150, batch_size=16, lr=1e-3, lr_scheduler=optim.lr_scheduler.MultiplicativeLR,
         lr_scheduler_kwargs=dict(lr_lambda=lambda ep: 0.95*ep), loss_fn=BinaryDiceLoss, loss_fn_kwargs=dict(reduction='mean'),
         weight_decay=1e-6, num_workers=0, device='cuda', print_progress=False):
         """
         Build a UNet_trainer object.
         ----------
         INPUT
-            |---- use_3D (bool) whether the UNet process images or volumes.
             |---- n_epoch (int) the number of epoch for the training.
             |---- batch_size (int) the batch size to use for loading the data.
             |---- lr (float) the learning rate.
@@ -49,7 +50,7 @@ class UNet_trainer:
             |---- device (str) the device to use.
             |---- print_progress (bool) whether to print progress bar for batch processing.
         OUTPUT
-            |---- UNet_trainer () the trainer for the UNet (2D or 3D)
+            |---- UNet_trainer () the trainer for the 3D UNet
         """
         # training parameters
         self.n_epoch = n_epoch
@@ -63,8 +64,6 @@ class UNet_trainer:
         self.num_workers = num_workers
         self.device = device
         self.print_progress = print_progress
-
-        self.use_3D = use_3D
 
         # Results
         self.train_time = None
@@ -80,7 +79,7 @@ class UNet_trainer:
         INPUT
             |---- net (nn.Module) the network architecture to train.
             |---- dataset (torch.utils.data.Dataset) the dataset to use for training. It must return an input image, a
-            |           target binary mask, the patientID (and the slice number for 2D).
+            |           target binary mask, the patientID.
             |---- valid_dataset (torch.utils.data.Dataset) the optional validation dataset. If provided, the model is
             |           validated at each epoch. It must have the same struture as the train dataset.
             |---- checkpoint_path (str) the filename for a possible checkpoint to start the training from.
@@ -128,10 +127,7 @@ class UNet_trainer:
 
             for b, data in enumerate(train_loader):
                 # get data
-                if self.use_3D:
-                    input, target, _ = data
-                else:
-                    input, target, _, _ = data
+                input, target, _ = data
                 # put data tensors on device
                 input = input.to(self.device).float().requires_grad_(True)
                 target = target.to(self.device)
@@ -188,7 +184,7 @@ class UNet_trainer:
             INPUT
                 |---- net (nn.Module) the network architecture to train.
                 |---- dataset (torch.utils.data.Dataset) the dataset to use for training. It must return an input image, a
-                |           target binary mask, the patientID (and the slice number for 2D).
+                |           target binary mask, the patientID.
                 |---- return_score (bool) whether to return the mean Dice and mean IoU scores of 3D segmentation (for
                 |           the 2D case the Dice is computed on the concatenation of prediction for a patient).
                 |---- print_to_logger (bool) whether to print information to the logger.
@@ -220,45 +216,27 @@ class UNet_trainer:
             with torch.no_grad():
                 for b, data in enumerate(loader):
                     # get data on device
-                    if self.use_3D:
-                        input, target, pID = data
-                    else:
-                        input, target, pID, slice_nbr = data
+                    input, target, pID = data
                     input = input.to(self.device).float()
                     target = target.to(self.device)
                     # make prediction
                     pred = net(input).argmax(dim=1)
 
                     # get confusion matrix for each slice of each samples
-                    if self.use_3D: # <--- to be revised (save in nifty --> no need to iterate slices)
-                        # decompose volume in slice and treat process them separately
-                        for id, target_samp, pred_samp in zip(pID, target, pred): # iterate over batch
-                            for s_nbr in range(target_samp.shape[-1]): # iterate over slices
-                                tn, fp, fn, tp = confusion_matrix(target_samp[:,:,:,s_nbr].cpu().data.numpy().ravel(),
-                                                                  pred_samp[:,:,:,s_nbr].cpu().data.numpy().ravel()).ravel()
-                                # save slice prediction if required
-                                if save_path:
-                                    im = PIL.Image.fromarray(pred_samp.cpu().numpy().astype(bool))
-                                    pred_path = f'{save_path}/{id}/{s_nbr+1}.bmp'
-                                    im.save(pred_path)
-                                else:
-                                    pred_path = 'None
+                    # decompose volume in slice and treat process them separately
+                    for id, target_samp, pred_samp in zip(pID, target, pred): # iterate over batch
+                        tn, fp, fn, tp = confusion_matrix(target_samp.cpu().data.numpy().ravel(),
+                                                          pred_samp.cpu().data.numpy().ravel()).ravel()
+                        # save slice prediction if required
+                        if save_path:
+                            img = nib.Nifti1Image(pred_samp.cpu().numpy().astype(bool), np.eye(4))
+                            pred_path = f'{save_path}/{id}.nii'
+                            nib.save(img, pred_path)
+                        else:
+                            pred_path = 'None
 
-                                # add to list
-                                id_pred.append({'PatientID':id.cpu(), 'Slice':i, 'TP':tp, 'TN':tn, 'FP':fp, 'FN':fn, 'pred_fn':None})
-                    else:
-                        for id, s_nbr, target_samp, pred_samp in zip(pID, slice_nbr, target, pred):
-                            tn, fp, fn, tp = confusion_matrix(target_samp.cpu().data.numpy().ravel(),
-                                                              pred_samp.cpu().data.numpy().ravel()).ravel()
-                            # save slice prediction if required
-                            if save_path:
-                                im = PIL.Image.fromarray(pred_samp.cpu().numpy().astype(bool))
-                                pred_path = f'{save_path}/{id}/{s_nbr}.bmp'
-                                im.save(pred_path)
-                            else:
-                                pred_path = 'None'
-                            # add to list
-                            id_pred.append({'PatientID':id.cpu(), 'Slice':s_nbr.cpu(), 'TP':tp, 'TN':tn, 'FP':fp, 'FN':fn, 'pred_fn':None})
+                        # add to list
+                        id_pred.append({'PatientID':id.cpu(), 'TP':tp, 'TN':tn, 'FP':fp, 'FN':fn, 'pred_fn':None})
 
                     if self.print_progress:
                         print_progessbar(b, len(loader), Name='\t\tEvaluation Batch', Size=40, erase=True)

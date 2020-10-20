@@ -16,7 +16,7 @@ class BinaryDiceLoss(nn.Module):
     """
     Pytorch Module defining the Dice Loss for the Binary Segmentation Case.
     """
-    def __init__(self, reduction='mean', p=2):
+    def __init__(self, reduction='mean', p=2, alpha=1.0):
         """
         Build a Binary Dice Loss Module.
         ----------
@@ -25,13 +25,15 @@ class BinaryDiceLoss(nn.Module):
             |---- p (uint) the power at which to elevate element before the denominator sum. Since the network output a
             |           sigmoid as prediction, a higher power will enforce the network to increase the prediction for
             |           positive pixels.
+            |---- alpha (float) the weight of prediction for ground truth without positive (Prediction's loss reduced if alpha < 1.0)
         OUTPUT
             |---- BinaryDiceLoss (nn.Module) the Loss module.
         """
         super(BinaryDiceLoss, self).__init__()
         assert reduction in ['mean', 'none', 'sum'], f"Reduction mode: '{reduction}' is not supported. Use either 'mean', 'sum' or 'none'."
         self.reduction = reduction
-        self.p = 1
+        self.p = p
+        self.alpha = alpha
         self.eps = 1 # for stability when mask and predictions are empty
 
     def forward(self, pred, mask):
@@ -50,6 +52,8 @@ class BinaryDiceLoss(nn.Module):
         inter = torch.sum(pred * mask, dim=sum_dim)
         union = torch.sum(pred.pow(self.p), dim=sum_dim) + torch.sum(mask.pow(self.p), dim=sum_dim)
         DL = 1 - (2 * inter + self.eps)/(union + self.eps)
+        # scale the loss with alpha
+        DL = torch.where(mask.sum(dim=sum_dim) > 0, DL, self.alpha * DL)
         # Apply the reduction
         if self.reduction == 'mean':
             return DL.mean()
@@ -58,13 +62,12 @@ class BinaryDiceLoss(nn.Module):
         elif self.reduction == 'none':
             return DL
 
-
 class ComboLoss(nn.Module):
     """
     Define the ComboLoss described by Asgari et al. It combines a Dice loss and a Binary cross entropy (BCE) loss in which
     the False Posistive (FP) and False Negative (FN) can be weighted.
     """
-    def __init__(self, alpha=0.5, beta=0.5, reduction='mean'):
+    def __init__(self, alpha=0.5, beta=0.5, reduction='mean', p=1):
         """
         Build a ComboLoss module for Binary segmentation.
         ----------
@@ -72,15 +75,19 @@ class ComboLoss(nn.Module):
             |---- alpha (float) the relative importance of the BCE compared to the Dice loss. Must be between 0 and 1.
             |---- beta (float) the relative importance of FP compared to FN in the BCE Loss. Must be between 0 and 1.
             |---- reduction (str) the reduction to apply over batches. Supported: 'mean', 'sum', 'none'
+            |---- p (int) the power at which to elevate element before the denominator sum. Since the network output a
+            |           sigmoid as prediction, a higher power will enforce the network to increase the prediction for
+            |           positive pixels.
         OUTPUT
             |---- ComboLoss (nn.Module) a combo loss module.
         """
+        super(ComboLoss, self).__init__()
         assert alpha >= 0 and alpha <= 1, f'ValueError. alpha must in the range [0,1]. {alpha} given'
         assert beta >= 0 and beta <= 1, f'ValueError. beta must in the range [0,1]. {beta} given'
         self.alpha = alpha
         self.beta = beta
         self.reduction = reduction
-        self.bin_dice_loss_fn = BinaryDiceLoss(reduction='none', p=1)
+        self.bin_dice_loss_fn = BinaryDiceLoss(reduction='none', p=p)
 
     def forward(self, pred, mask):
         """

@@ -67,9 +67,9 @@ def analyse_supervised_exp(exp_folder, data_path, save_fn='results_overview.pdf'
     ax_evo = fig.add_subplot(gs[:2,:4])
     colors_evo = ['black', 'tomato', 'dodgerblue']
     serie_names_evo = ['Train Loss', 'Dice (all)', 'Dice (ICH)']
-    curve_std(data_evo, serie_names_evo, colors=colors_evo, ax=ax_evo, lw=2, CI_alpha=0.25, plot_rep=False,
+    curve_std(data_evo, serie_names_evo, colors=colors_evo, ax=ax_evo, lw=1, CI_alpha=0.05, rep_alpha=0.25, plot_rep=True,
               plot_mean=True, plot_CI=True, legend=True,
-              legend_kwargs=dict(loc='upper left', ncol=2, frameon=False, framealpha=0.0,
+              legend_kwargs=dict(loc='upper left', ncol=3, frameon=False, framealpha=0.0,
                                  fontsize=fontsize, bbox_to_anchor=(0.0, -0.3), bbox_transform=ax_evo.transAxes))
     ax_evo.set_xlabel('Epoch [-]', fontsize=fontsize)
     ax_evo.set_ylabel('Dice Loss [-] ; Dice Coeff. [-]', fontsize=fontsize)
@@ -175,3 +175,6 @@ def analyse_supervised_exp(exp_folder, data_path, save_fn='results_overview.pdf'
 
     # Save figure
     fig.savefig(save_fn, dpi=300, bbox_inches='tight')
+
+
+#analyse_supervised_exp('../../../outputs/window_unet2D/UNet2D_13_10_input0.1_win200_150ep/', '../../../data/publicSegICH2D/', 'test.pdf')
