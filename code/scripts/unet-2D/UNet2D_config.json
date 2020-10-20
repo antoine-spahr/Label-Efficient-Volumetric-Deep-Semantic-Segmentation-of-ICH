@@ -1,5 +1,5 @@
 {
-  "exp_name": "UNet2D_06_10_all_input_win500",
+  "exp_name": "UNet2D_06_10_all_input_win50-150",
   "path": {
     "DATA": "../../../data/publicSegICH2D/",
     "OUTPUT": "../../../outputs/"
@@ -9,12 +9,22 @@
   "seed": 42,
   "print_progress": true,
   "data":{
-    "win_center": 0,
-    "win_width": 500,
-    "size": 256
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256,
+    "augmentation":{
+        "train":{
+          "Translate": {"low": -0.1, "high": 0.1},
+          "Rotate": {"low": -10, "high": 10},
+          "Scale": {"low": 0.9, "high": 1.1},
+          "HFlip": {"p": 0.5}
+        },
+        "eval":{
+        }
+    }
   },
   "dataset":{
-    "frac_negative": 1
+    "frac_negative": 0.5
   },
   "split":{
     "n_fold": 5,
@@ -33,9 +43,9 @@
     "loss_fn": "BinaryDiceLoss",
     "loss_fn_kwargs":{
       "reduction": "mean",
-      "p":1
+      "p":2
     },
-    "n_epoch": 50,
+    "n_epoch": 100,
     "batch_size": 16,
     "lr": 1e-3,
     "lr_scheduler": "ExponentialLR",

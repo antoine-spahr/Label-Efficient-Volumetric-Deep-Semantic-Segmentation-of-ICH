@@ -26,6 +26,7 @@ from src.utils.Config import Config
 from src.models.UNet2D import UNet2D
 from src.dataset.datasets import public_SegICH_Dataset2D
 from src.models.optim.LossFunctions import BinaryDiceLoss
+import src.dataset.transforms as tf
 import src.models.optim.LossFunctions
 from src.models.networks.UNet import UNet
 from src.postprocessing.analyse_exp import analyse_supervised_exp
@@ -104,15 +105,18 @@ def main(config_path):
             train_df = data_info_df[data_info_df.PatientNumber.isin(patient_df.loc[train_idx,'PatientNumber'].values)]
             test_df = data_info_df[data_info_df.PatientNumber.isin(patient_df.loc[test_idx,'PatientNumber'].values)]
             # sample the dataframe to have more or less normal slices
-            df_remove = train_df[train_df.Hemorrhage == 0].sample(frac=1 - cfg.settings['dataset']['frac_negative'], random_state=seed)
+            n_remove = int(max(0, len(train_df[train_df.Hemorrhage == 0]) - cfg.settings['dataset']['frac_negative'] * len(train_df[train_df.Hemorrhage == 1])))
+            df_remove = train_df[train_df.Hemorrhage == 0].sample(n=n_remove, random_state=seed)#frac=1 - cfg.settings['dataset']['frac_negative'], random_state=seed)
             train_df = train_df[~train_df.index.isin(df_remove.index)]
             logger.info('\n' + str(get_split_summary_table(data_info_df, train_df, test_df)))
 
             # Make Dataset + print online augmentation summary
-            train_dataset = public_SegICH_Dataset2D(train_df, cfg.settings['path']['DATA'], data_augmentation=True,
+            train_dataset = public_SegICH_Dataset2D(train_df, cfg.settings['path']['DATA'],
+                                                    augmentation_transform=[getattr(tf, tf_name)(**tf_kwargs) for tf_name, tf_kwargs in cfg.settings['data']['augmentation']['train'].items()],
                                                     window=(cfg.settings['data']['win_center'], cfg.settings['data']['win_width']),
                                                     output_size=cfg.settings['data']['size'])
-            test_dataset = public_SegICH_Dataset2D(test_df, cfg.settings['path']['DATA'], data_augmentation=False,
+            test_dataset = public_SegICH_Dataset2D(test_df, cfg.settings['path']['DATA'],
+                                                   augmentation_transform=[getattr(tf, tf_name)(**tf_kwargs) for tf_name, tf_kwargs in cfg.settings['data']['augmentation']['eval'].items()],
                                                    window=(cfg.settings['data']['win_center'], cfg.settings['data']['win_width']),
                                                    output_size=cfg.settings['data']['size'])
             logger.info(f"Data will be loaded from {cfg.settings['path']['DATA']}.")
@@ -176,6 +180,10 @@ def main(config_path):
             # append avergae dice/IoU to list
             scores_list.append([unet2D.train_stat['eval']['dice']['all'], unet2D.train_stat['eval']['IoU']['all'],
                                 unet2D.train_stat['eval']['dice']['ICH'], unet2D.train_stat['eval']['IoU']['ICH']])
+
+            # delete checkpoint
+            os.remove(out_path + f'Fold_{k+1}/checkpoint_path.pt')
+            logger.info('Checkpoint deleted.')
 
     # save mean +/- 1.96 std Dice and IoU in .txt file
     means = np.array(scores_list).mean(axis=0)
