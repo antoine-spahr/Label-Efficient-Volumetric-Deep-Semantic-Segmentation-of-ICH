@@ -14,6 +14,7 @@ import skimage
 import torch
 from torch.utils import data
 import nibabel as nib
+import pydicom
 
 import src.dataset.transforms as tf
 from src.utils.ct_utils import window_ct, resample_ct
@@ -22,7 +23,8 @@ class public_SegICH_Dataset2D(data.Dataset):
     """
     Define a torch dataset enabling to load 2D CT and ICH mask.
     """
-    def __init__(self, data_df, data_path, data_augmentation=True, window=None, output_size=256):
+    def __init__(self, data_df, data_path, augmentation_transform=[tf.Translate(low=-0.1, high=0.1), tf.Rotate(low=-10, high=10),
+                 tf.Scale(low=0.9, high=1.1), tf.HFlip(p=0.5)], window=None, output_size=256):
         """
         Build a dataset for the 2D annotated segmentation of ICH.
         ----------
@@ -30,7 +32,7 @@ class public_SegICH_Dataset2D(data.Dataset):
             |---- data_df (pd.DataFrame) the input dataframe of samples. Each row must contains a patient number, a slice
             |           number, an image filename and a mask filename.
             |---- data_path (str) path to the root of the dataset folder (until where the samples' filnames begins).
-            |---- data_augmentation (bool) whether to apply data augmentation.
+            |---- augmentation_transform (list of transofrom) data augmentation transformation to apply.
             |---- window (tuple (center, width)) the window for CT intensity rescaling. If None, no windowing is performed.
             |---- output_size (int) the dimension of the output (H = W).
         OUTPUT
@@ -41,16 +43,9 @@ class public_SegICH_Dataset2D(data.Dataset):
         self.data_path = data_path
         self.window = window
 
-        if data_augmentation:
-            self.transform = tf.Compose(tf.Translate(low=-0.1, high=0.1),
-                                        tf.Rotate(low=-10, high=10),
-                                        tf.Scale(low=0.9, high=1.1),
-                                        tf.Resize(H=output_size, W=output_size),
-                                        tf.HFlip(p=0.5),
-                                        tf.ToTorchTensor())
-        else:
-            self.transform = tf.Compose(tf.Resize(H=output_size, W=output_size),
-                                        tf.ToTorchTensor())
+        self.transform = tf.Compose(*augmentation_transform,
+                                    tf.Resize(H=output_size, W=output_size),
+                                    tf.ToTorchTensor())
 
     def __len__(self):
         """
@@ -98,8 +93,9 @@ class public_SegICH_Dataset3D(data.Dataset):
     """
     Define a torch dataset enabling to load 3D CT and ICH mask from NIfTI.
     """
-    def __init__(self, data_df, data_path, data_augmentation=True, win_center=40, win_width=120, out_range=(0,1),
-                 resampling_dim=(-1, -1, 2.5), resampling_order=1, vol_thickness=64):
+    def __init__(self, data_df, data_path, augmentation_transform=[tf.RandomZCrop(Z=64), tf.Translate(low=-0.1, high=0.1), tf.Rotate(low=-10, high=10),
+                 tf.Scale(low=0.9, high=1.1), tf.HFlip(p=0.5)], window=None, resampling_dim=(-1, -1, 2.5),
+                 resampling_order=1):
         """
         Build a dataset for the 3D annotated segmentation of ICH from NIfTI images.
         ----------
@@ -107,15 +103,12 @@ class public_SegICH_Dataset3D(data.Dataset):
             |---- data_df (pd.DataFrame) the input dataframe of samples. Each row must contains a patient number, an
             |           image filename and a mask filename.
             |---- data_path (str) path to the root of the dataset folder (until where the samples' filnames begins).
-            |---- data_augmentation (bool) whether to apply data augmentation.
-            |---- win_center (int) the window center for the CT-scan windowing.
-            |---- win_width (int) the window width for the CT-scan windowing.
-            |---- out_range (tuple (low, high)) the output range for the windowing.
+            |---- augmentation_transform (list of transofrom) data augmentation transformation to apply.
+            |---- window (tuple (center, width)) the window for CT intensity rescaling. If None, no windowing is performed.
             |---- resampling_dim (tuple (x, y, z)) the output pixel dimension for volume reampling. If value is set to
             |           -1, the input pixel dimension is used.
             |---- resampling_order (int) define the interpolation strategy for the resampling. Must be between 0 and 5.
             |           See scipy.ndimage.zoom().
-            |---- vol_thickness (int) the number of slice to take from the resampled volume.
         OUTPUT
             |---- ICH_Dataset3D (torch.Dataset) the 3D dataset.
         """
@@ -123,24 +116,13 @@ class public_SegICH_Dataset3D(data.Dataset):
         self.data_df = data_df
         self.data_path = data_path
 
-        self.win_center = win_center
-        self.win_width = win_width
-        self.out_range = out_range
+        self.window = window
         self.resampling_dim = resampling_dim
         self.resampling_order = resampling_order
 
-        if data_augmentation:
-            self.transform = tf.Compose(tf.RandomZCrop(Z=vol_thickness),
-                                        tf.Translate(low=-0.1, high=0.1),
-                                        tf.Rotate(low=-10, high=10),
-                                        tf.Scale(low=0.9, high=1.1),
-                                        tf.Resize(H=256, W=256),
-                                        tf.HFlip(p=0.5),
-                                        tf.ToTorchTensor())
-        else:
-            self.transform = tf.Compose(tf.RandomZCrop(Z=vol_thickness),
-                                        tf.Resize(H=256, W=256),
-                                        tf.ToTorchTensor())
+        self.transform = tf.Compose(*augmentation_transform,
+                                    tf.Resize(H=output_size, W=output_size),
+                                    tf.ToTorchTensor())
 
     def __len__(self):
         """
@@ -172,7 +154,7 @@ class public_SegICH_Dataset3D(data.Dataset):
         pix_dim = ct_nii.header['pixdim'][1:4] # recover pixel physical dimension
 
         # window CT-scan for soft tissus
-        ct_vol = window_ct(ct_vol, win_center=self.win_center, win_width=self.win_width, out_range=self.out_range)
+        ct_vol = window_ct(ct_vol, win_center=self.window[0], win_width=self.window[1], out_range=(0,1))
         # resample vol and mask
         ct_vol = resample_ct(ct_vol, pix_dim, out_pixel_dim=self.resampling_dim, preserve_range=True,
                              order=self.resampling_order)
@@ -182,3 +164,93 @@ class public_SegICH_Dataset3D(data.Dataset):
         ct_vol, mask = self.transform(ct_vol, mask)
 
         return ct_vol, mask.bool(), pID
+
+
+class RSNA_dataset(data.Dataset):
+    """
+    Dataset object to load the RSNA data.
+    """
+    def __init__(self, data_df, data_path, augmentation_transform=[tf.Translate(low=-0.1, high=0.1), tf.Rotate(low=-10, high=10),
+                 tf.Scale(low=0.9, high=1.1), tf.HFlip(p=0.5)], window=None, output_size=256,
+                 mode='standard', n_swap=10, swap_w=15, swap_h=15, contrastive_augmentation=None):
+        """
+        Build a dataset for the RSNA dataset of ICH CT slice.
+        ----------
+        INPUT
+            |---- data_df (pd.DataFrame) the input dataframe of samples. Each row must contains a filename and a columns
+            |           Hemorrhage specifying if slice has or not an hemorrhage.
+            |---- data_path (str) path to the root of the dataset folder (until where the samples' filnames begins).
+            |---- augmentation_transform (list of transofrom) data augmentation transformation to apply.
+            |---- window (tuple (center, width)) the window for CT intensity rescaling. If None, no windowing is performed.
+            |---- output_size (int) the dimension of the output (H = W).
+            |---- mode (str) define how to load the RSNA dataset. 'standard': return an image with its label.
+            |           'context_restoration': return the image and the corruped image. 'contrastive': return two heavilly
+            |           augmented version of the input image.
+            |---- n_swap (int) the number of swap to use in the context_restoration mode.
+            |---- swap_h (int) the height of the swapped patch in the context_restoration mode.
+            |---- swap_w (int) the width of the swapped patch in the context_restoration mode.
+            |---- contrastive_augmentation (list of transformation) the list of augmentation to apply in the contrastive
+            |           mode. They must be composable by tf.Compose.
+        OUTPUT
+            |---- RSNA_dataset (torch.Dataset) the RSNA dataset.
+        """
+        super(RSNA_dataset, self).__init__()
+        self.data_df = data_df
+        self.data_path = data_path
+        self.window = window
+        assert mode in ['standard', 'context_restoration', 'contrastive'], f"Invalid mode. Must be one of 'standard', 'context_restoration', 'contrastive'. Given : {mode}"
+        self.mode = mode
+
+        self.transform = tf.Compose(*augmentation_transform,
+                                    tf.Resize(H=output_size, W=output_size))#,
+                                    #tf.ToTorchTensor())
+        self.toTensor = tf.ToTorchTensor()
+        if mode == 'context_restoration':
+            self.swap_tranform = tf.RandomPatchSwap(n=n_swap, w=swap_w, h=swap_h)
+        elif mode == 'contrastive':
+            self.contrastive_transform = tf.Compose()
+            raise NotImplementedError
+
+    def __len__(self):
+        """
+        eturn the number of samples in the dataset.
+        ----------
+        INPUT
+            |---- None
+        OUTPUT
+            |---- N (int) the number of samples in the dataset.
+        """
+        return len(self.data_df)
+
+    def __getitem__(self, idx):
+        """
+        Extract the CT sepcified by idx.
+        ----------
+        INPUT
+            |---- idx (int) the sample index in self.data_df.
+        OUTPUT
+            |---- im (torch.tensor) the CT image with dimension (1 x H x W).
+            |---- lab (torch.tensor) the label for hemorrhage presence (0 or 1).
+            |---- idx (torch.tensor) the sample idx.
+        """
+        # load dicom and recover the CT pixel values
+        dcm_im = pydicom.dcmread(self.data_path + self.data_df.iloc[idx].filename)
+        im = (dcm_im.pixel_array * float(dcm_im.RescaleSlope) + float(dcm_im.RescaleIntercept))
+        # Window the CT-scan
+        if self.window:
+            im = window_ct(im, win_center=self.window[0], win_width=self.window[1], out_range=(0,1))
+        # transform image
+        im = self.transform(im)
+        if self.mode == 'standard':
+            # load label
+            #lab = self.data_df.iloc[idx].Hemorrhage
+            return self.toTensor(im), torch.tensor(idx) #torch.tensor(lab), torch.tensor(idx)
+        elif self.mode == 'context_restoration':
+            # generate corrupeted version
+            swapped_im = self.swap_tranform(im)
+            return self.toTensor(im), self.toTensor(swapped_im), torch.tensor(idx)
+        elif self.mode == 'contrastive':
+            # augmente image twice
+            im1 = self.contrastive_transform(im)
+            im2 = self.contrastive_transform(im)
+            return self.toTensor(im1), self.toTensor(im2), torch.tensor(idx)

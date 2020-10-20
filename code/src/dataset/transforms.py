@@ -20,7 +20,7 @@ class Compose:
     Compose, in a sequential fashion, multiple transforms than can handle an
     image and a mask in their __call__.
     """
-    def __init__(self, *transformations):
+    def __init__(self, *transformations, pass_mask=True):
         """
         Build a sequential composition of transforms.
         ----------
@@ -42,10 +42,14 @@ class Compose:
             |---- image () the transformed image.
             |---- mask () the transformed mask.
         """
-        for f in self.transformations:
-            image, mask = f(image, mask)
-
-        return image, mask
+        if mask is not None:
+            for f in self.transformations:
+                image, mask = f(image, mask)
+            return image, mask
+        else:
+            for f in self.transformations:
+                image = f(image)
+            return image
 
     def __str__(self):
         """
@@ -71,7 +75,7 @@ class RandomZCrop:
         """
         self.Z = Z
 
-    def __call__(self, image, mask):
+    def __call__(self, image, mask=None):
         """
         Randomly crop the np.array image and mask along Z.
         ----------
@@ -84,13 +88,16 @@ class RandomZCrop:
         """
         assert image.ndim == 3 and mask.ndim == 3, 'Input must be 3D numpy arrays!'
         assert image.shape[2] > self.Z, f'Input image z-dimension ({image.shape[2]}) must be larger that the crop size {self.Z}.'
-        assert mask.shape[2] > self.Z, f'Input mask z-dimension ({mask.shape[2]}) must be larger that the crop size {self.Z}.'
+        if mask:
+            assert mask.shape[2] > self.Z, f'Input mask z-dimension ({mask.shape[2]}) must be larger that the crop size {self.Z}.'
 
         z_idx = np.random.randint(0, image.shape[2] - self.Z)
         image = image[:, :, z_idx:z_idx+self.Z]
-        mask = mask[:, :, z_idx:z_idx+self.Z]
-
-        return image, mask
+        if mask is not None:
+            mask = mask[:, :, z_idx:z_idx+self.Z]
+            return image, mask
+        else:
+            return image
 
     def __str__(self):
         """
@@ -102,7 +109,7 @@ class Resize:
     """
     Resize the image and mask to the given height and width.
     """
-    def __init__(self, H=256, W=256):
+    def __init__(self, H=256, W=256, pass_mask=True):
         """
         Build a to resize transform.
         ----------
@@ -115,7 +122,7 @@ class Resize:
         self.H = H
         self.W = W
 
-    def __call__(self, image, mask):
+    def __call__(self, image, mask=None):
         """
         Resize the np.array image and mask (in x, y).
         ----------
@@ -127,8 +134,11 @@ class Resize:
             |---- mask (np.array) the converted mask.
         """
         image = skimage.transform.resize(image, (self.H, self.W, *image.shape[2:]), order=1)#, cval=image.min())
-        mask = skimage.transform.resize(mask, (self.H, self.W, *mask.shape[2:]), order=0, preserve_range=True)
-        return image, mask
+        if mask is not None:
+            mask = skimage.transform.resize(mask, (self.H, self.W, *mask.shape[2:]), order=0, preserve_range=True)
+            return image, mask
+        else:
+            return image
 
     def __str__(self):
         """
@@ -153,7 +163,7 @@ class Translate:
         self.low = low
         self.high = high
 
-    def __call__(self, image, mask):
+    def __call__(self, image, mask=None):
         """
         Randomly translate the np.array image and mask (in x, y).
         ----------
@@ -162,7 +172,7 @@ class Translate:
             |---- mask (np.array) the mask to convert.
         OUTPUT
             |---- image (np.array) the converted image.
-            |---- mask (np.array) the converted mask.
+            |---- (mask) (np.array) the converted mask.
         """
         # randomly sample a shift in x and y. No shift in z
         shift = [np.random.uniform(low=image.shape[0]*self.low, high=image.shape[0]*self.high),
@@ -170,9 +180,11 @@ class Translate:
         shift += [0] * (image.ndim - 2)
 
         image = scipy.ndimage.shift(image, shift, order=3)#, cval=image.min())
-        mask = scipy.ndimage.shift(mask, shift, order=0)
-
-        return image, mask
+        if mask is not None:
+            mask = scipy.ndimage.shift(mask, shift, order=0)
+            return image, mask
+        else:
+            return image
 
     def __str__(self):
         """
@@ -197,7 +209,7 @@ class Scale:
         self.low = low
         self.high = high
 
-    def __call__(self, image, mask):
+    def __call__(self, image, mask=None):
         """
         Randomly scale the np.array image and mask (in x, y).
         ----------
@@ -222,12 +234,17 @@ class Scale:
 
         if scale_factor >= 1:
             image = skimage.util.crop(scipy.ndimage.zoom(image, scales, order=3), adjust_list)
-            mask = skimage.util.crop(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
+            if mask is not None:
+                mask = skimage.util.crop(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
         else:
             image = skimage.util.pad(scipy.ndimage.zoom(image, scales, order=3), adjust_list)#, constant_values=image.min())
-            mask = skimage.util.pad(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
+            if mask is not None:
+                mask = skimage.util.pad(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
 
-        return image, mask
+        if mask is not None:
+            return image, mask
+        else:
+            return image
 
     def __str__(self):
         """
@@ -252,7 +269,7 @@ class Rotate:
         self.low = low
         self.high = high
 
-    def __call__(self, image, mask):
+    def __call__(self, image, mask=None):
         """
         Randomly rotate the np.array image and mask (in x, y).
         ----------
@@ -267,9 +284,11 @@ class Rotate:
         angle = np.random.uniform(low=self.low, high=self.high)
 
         image = scipy.ndimage.rotate(image, angle, axes=(1,0), order=3, reshape=False)#, cval=image.min())
-        mask = scipy.ndimage.rotate(mask, angle, axes=(1,0), order=0, reshape=False)
-
-        return image, mask
+        if mask is not None:
+            mask = scipy.ndimage.rotate(mask, angle, axes=(1,0), order=0, reshape=False)
+            return image, mask
+        else:
+            return image
 
     def __str__(self):
         """
@@ -293,7 +312,7 @@ class HFlip:
         assert p >= 0 or p <= 1, f'Probability must be between 0 and 1. Given : {p}'
         self.p = p
 
-    def __call__(self, image, mask):
+    def __call__(self, image, mask=None):
         """
         Randomly flip horizontally the np.array image and mask.
         ----------
@@ -306,9 +325,13 @@ class HFlip:
         """
         if np.random.random() < self.p:
             image = np.array(np.flip(image, axis=1)) # reconvert in array to make it contiguous
-            mask = np.array(np.flip(mask, axis=1))
+            if mask is not None:
+                mask = np.array(np.flip(mask, axis=1))
 
-        return image, mask
+        if mask is not None:
+            return image, mask
+        else:
+            return image
 
     def __str__(self):
         """
@@ -330,7 +353,7 @@ class ToTorchTensor:
             |---- ToTensor transform.
         """
 
-    def __call__(self, image, mask):
+    def __call__(self, image, mask=None):
         """
         Convert the image and mask (np.array) to a torch.Tensor
         ----------
@@ -342,11 +365,97 @@ class ToTorchTensor:
             |---- mask (torch.Tensor) the converted mask.
         """
         image = torch.from_numpy(image).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(image)
-        mask = torch.from_numpy(mask).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(mask)
-        return image, mask.bool()
+        if mask is not None:
+            mask = torch.from_numpy(mask).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(mask)
+            return image, mask.bool()
+        else:
+            return image
 
     def __str__(self):
         """
         Transform printing format
         """
         return "ToTorchTensor()"
+
+class RandomPatchSwap:
+    """
+    Corrupt an input image by swapping random crops within itself. (as in Chen 2019).
+    """
+    def __init__(self, n=10, w=15, h=15):
+        """
+        Build a RandomPatchSwap transform.
+        ----------
+        INPUT
+            |---- n (int) the number of swap to perform.
+            |---- w (int) the width of the patch to swap.
+            |---- h (int) the height of the patch to swap.
+        OUTPUT
+            |---- a RandomPatchSwap transform.
+        """
+        self.n = n
+        self.h = h
+        self.w = w
+
+    def __call__(self, image, mask=None):
+        """
+        Swap randomly several crop within the image (and mask).
+        ----------
+        INPUT
+            |---- image (np.array) the image to convert.
+            |---- mask (np.array) the mask to convert.
+        OUTPUT
+            |---- image (np.array) the converted image.
+            |---- mask (np.array) the converted mask.
+        """
+        image = image.copy()
+        mask = mask.copy() if mask is not None else mask
+        for _ in range(self.n):
+            # get patches to swap
+            p1, p2 = None, None
+            while self.has_overlap(p1, p2):
+                p1 = (np.random.randint(low=0, high=image.shape[0]-self.h), np.random.randint(low=0, high=image.shape[1]-self.w))
+                p2 = (np.random.randint(low=0, high=image.shape[0]-self.h), np.random.randint(low=0, high=image.shape[1]-self.w))
+
+            # swap patches content
+            patch1 = image[p1[0]:p1[0]+self.h, p1[1]:p1[1]+self.w].copy()
+            image[p1[0]:p1[0]+self.h, p1[1]:p1[1]+self.w] = image[p2[0]:p2[0]+self.h, p2[1]:p2[1]+self.w]
+            image[p2[0]:p2[0]+self.h, p2[1]:p2[1]+self.w] = patch1
+
+            # crop mask as well if passed
+            if mask is not None:
+                patch1 = mask[p1[0]:p1[0]+self.h, p1[1]:p1[1]+self.w].copy()
+                mask[p1[0]:p1[0]+self.h, p1[1]:p1[1]+self.w] = mask[p2[0]:p2[0]+self.h, p2[1]:p2[1]+self.w]
+                mask[p2[0]:p2[0]+self.h, p2[1]:p2[1]+self.w] = patch1
+
+        if mask is not None:
+            return image, mask
+        else:
+            return image
+
+    def has_overlap(self, p1, p2):
+        """
+        Check if there's any overlap between p1 and p2.
+        ----------
+        INPUT
+            |---- p1 (tuple) top left corner of first rectangle (row, col).
+            |---- p2 (tuple) top left corner of second rectangle (row, col).
+        OUTPUT
+            |---- overlap (bool) True if the two rectangles overlap.
+        """
+        if p1 is None or p2 is None:
+            return True
+        else:
+            return (abs(p1[0] - p2[0]) <= self.h) and (abs(p1[1] - p2[1]) <= self.w)
+
+    def __str__(self):
+        """
+        Transform printing format
+        """
+        return f"RandomPatchSwap(n={self.n}, w={self.w}, h={self.h})"
+
+
+
+
+
+
+#

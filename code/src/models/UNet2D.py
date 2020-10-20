@@ -9,6 +9,7 @@ TO DO :
 """
 import torch
 import json
+import logging
 
 from src.models.optim.UNet2D_trainer import UNet2D_trainer
 from src.models.optim.LossFunctions import BinaryDiceLoss
@@ -103,6 +104,29 @@ class UNet2D:
         self.train_stat['eval']['time'] = self.trainer.eval_time
         self.train_stat['eval']['dice'] = self.trainer.eval_dice
         self.train_stat['eval']['IoU'] = self.trainer.eval_IoU
+
+    def transfer_weights(self, init_state_dict, verbose=False):
+        """
+        Initialize the network with the weights in the provided state dictionnary. The transfer is performed on the
+        matching keys of the provided state_dict and the network state_dict.
+        ----------
+        INPUT
+            |---- init_state_dict (dict (module:params)) the weights to initiliatize the network with. Only the matching
+            |           keys of the state_dict dictionnary will be transferred.
+            |---- verbose (bool) whether to display some summary of the transfer.
+        OUTPUT
+            |---- None
+        """
+        # get U-Net state dict
+        unet_dict = self.unet.state_dict()
+        # get common keys
+        to_transfer_state_dict = {k:w for k, w in init_state_dict.items() if k in unet_dict}
+        if verbose:
+            logger = logging.getLogger()
+            logger.info(f'{len(to_transfer_state_dict)} matching weight keys found on {len(init_state_dict)} to be tranferred to the U-Net ({len{unet_dict}} weight keys).')
+        # update U-Net weights
+        unet_dict.update(to_transfer_state_dict)
+        self.unet.load_state_dict(unet_dict)
 
     def save_model(self, export_fn):
         """
