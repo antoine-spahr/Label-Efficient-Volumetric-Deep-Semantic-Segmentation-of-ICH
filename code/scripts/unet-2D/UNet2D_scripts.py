@@ -13,6 +13,7 @@ sys.path.append('../../')
 import click
 import os
 import logging
+import json
 import random
 import torch
 import torch.cuda
@@ -23,7 +24,7 @@ from prettytable import PrettyTable
 from  sklearn.model_selection import StratifiedKFold
 
 from src.utils.Config import Config
-from src.models.UNet2D import UNet2D
+from src.models.optim.UNet2D import UNet2D
 from src.dataset.datasets import public_SegICH_Dataset2D
 from src.models.optim.LossFunctions import BinaryDiceLoss
 import src.dataset.transforms as tf
@@ -43,10 +44,10 @@ def main(config_path):
     cfg.load_config(config_path)
 
     # Make Output directories
-    out_path = cfg.settings['path']['OUTPUT'] + cfg.settings['exp_name'] + '/'
+    out_path = os.path.join(cfg.settings['path']['OUTPUT'], cfg.settings['exp_name'])# + '/'
     os.makedirs(out_path, exist_ok=True)
     for k in range(cfg.settings['split']['n_fold']):
-        os.makedirs(out_path + f'Fold_{k+1}/pred/', exist_ok=True)
+        os.makedirs(os.path.join(out_path, f'Fold_{k+1}/pred/'), exist_ok=True)
 
     # Initialize random seed to given seed
     seed = cfg.settings['seed']
@@ -59,9 +60,9 @@ def main(config_path):
         torch.backends.cudnn.deterministic = True
 
     # Load data csv
-    data_info_df = pd.read_csv(cfg.settings['path']['DATA'] + 'ct_info.csv')
+    data_info_df = pd.read_csv(os.path.join(cfg.settings['path']['DATA'], 'ct_info.csv'))
     data_info_df = data_info_df.drop(data_info_df.columns[0], axis=1)
-    patient_df = pd.read_csv(cfg.settings['path']['DATA'] + 'patient_info.csv')
+    patient_df = pd.read_csv(os.path.join(cfg.settings['path']['DATA'], 'patient_info.csv'))
     patient_df = patient_df.drop(patient_df.columns[0], axis=1)
 
     # Generate Cross-Val indices at the patient level
@@ -69,10 +70,10 @@ def main(config_path):
                           shuffle=cfg.settings['split']['shuffle'],
                           random_state=seed)
     # iterate over folds and ensure that there are the same amount of ICH positive patient per fold --> Stratiffied CrossVal
-    scores_list = [] # placeholder for mean test dice and IoU of each fold
+    #scores_list = [] # placeholder for mean test dice of each fold
     for k, (train_idx, test_idx) in enumerate(skf.split(patient_df.PatientNumber, patient_df.Hemorrhage)):
         # if fold results not already there
-        if not os.path.exists(out_path + f'Fold_{k+1}/train_stat.json'):
+        if not os.path.exists(os.path.join(out_path, f'Fold_{k+1}/outputs.json')):
             # initialize logger
             logging.basicConfig(level=logging.INFO)
             logger = logging.getLogger()
@@ -82,13 +83,13 @@ def main(config_path):
             except IndexError:
                 pass
             logger.setLevel(logging.INFO)
-            file_handler = logging.FileHandler(out_path + f'Fold_{k+1}/log.txt')
+            file_handler = logging.FileHandler(os.path.join(out_path, f'Fold_{k+1}/log.txt'))
             file_handler.setLevel(logging.INFO)
             file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
             logger.addHandler(file_handler)
 
-            if os.path.exists(out_path + f'Fold_{k+1}/checkpoint.pt'):
-                logger.info('#'*30 + f'\n Recovering Session \n' + '#'*30)
+            if os.path.exists(os.path.join(out_path, f'Fold_{k+1}/checkpoint.pt')):
+                logger.info('\n' + '#'*30 + f'\n Recovering Session \n' + '#'*30)
 
             logger.info(f"Experiment : {cfg.settings['exp_name']}")
             logger.info(f"Cross-Validation fold {k+1:02}/{cfg.settings['split']['n_fold']:02}")
@@ -106,7 +107,7 @@ def main(config_path):
             test_df = data_info_df[data_info_df.PatientNumber.isin(patient_df.loc[test_idx,'PatientNumber'].values)]
             # sample the dataframe to have more or less normal slices
             n_remove = int(max(0, len(train_df[train_df.Hemorrhage == 0]) - cfg.settings['dataset']['frac_negative'] * len(train_df[train_df.Hemorrhage == 1])))
-            df_remove = train_df[train_df.Hemorrhage == 0].sample(n=n_remove, random_state=seed)#frac=1 - cfg.settings['dataset']['frac_negative'], random_state=seed)
+            df_remove = train_df[train_df.Hemorrhage == 0].sample(n=n_remove, random_state=seed)
             train_df = train_df[~train_df.index.isin(df_remove.index)]
             logger.info('\n' + str(get_split_summary_table(data_info_df, train_df, test_df)))
 
@@ -136,7 +137,13 @@ def main(config_path):
             logger.info(f"The U-Net2D has {sum(p.numel() for p in unet_arch.parameters())} parameters.")
 
             # Make model
-            unet2D = UNet2D(unet_arch)
+            unet2D = UNet2D(unet_arch, n_epoch=cfg.settings['train']['n_epoch'], batch_size=cfg.settings['train']['batch_size'],
+                            lr=cfg.settings['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg.settings['train']['lr_scheduler']),
+                            lr_scheduler_kwargs=cfg.settings['train']['lr_scheduler_kwargs'],
+                            loss_fn=getattr(src.models.optim.LossFunctions, cfg.settings['train']['loss_fn']),
+                            loss_fn_kwargs=cfg.settings['train']['loss_fn_kwargs'], weight_decay=cfg.settings['train']['weight_decay'],
+                            num_workers=cfg.settings['train']['num_workers'], device=cfg.settings['device'],
+                            print_progress=cfg.settings['print_progress'])
 
             # Load model if required
             if cfg.settings['train']['model_path_to_load']:
@@ -150,7 +157,7 @@ def main(config_path):
                     raise ValueError(f'Model path to load type not understood.')
                 logger.info(f"2D U-Net model loaded from {model_path}")
 
-            # print Training parameters
+            # print Training hyper-parameters
             train_params = []
             for key, value in cfg.settings['train'].items():
                 train_params.append(f"--> {key} : {value}")
@@ -158,57 +165,49 @@ def main(config_path):
 
             # Train model
             eval_dataset = test_dataset if cfg.settings['train']['validate_epoch'] else None
-            unet2D.train(train_dataset, valid_dataset=eval_dataset, checkpoint_path=out_path + f'Fold_{k+1}/checkpoint_path.pt',
-                         n_epoch=cfg.settings['train']['n_epoch'], batch_size=cfg.settings['train']['batch_size'],
-                         lr=cfg.settings['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg.settings['train']['lr_scheduler']),
-                         lr_scheduler_kwargs=cfg.settings['train']['lr_scheduler_kwargs'], loss_fn=getattr(src.models.optim.LossFunctions, cfg.settings['train']['loss_fn']),#global()[cfg.settings['train']['loss_fn']],
-                         loss_fn_kwargs=cfg.settings['train']['loss_fn_kwargs'], weight_decay=cfg.settings['train']['weight_decay'],
-                         num_workers=cfg.settings['train']['num_workers'], device=cfg.settings['device'],
-                         print_progress=cfg.settings['print_progress'])
+            unet2D.train(train_dataset, valid_dataset=eval_dataset, checkpoint_path=os.path.join(out_path, f'Fold_{k+1}/checkpoint.pt'))
 
             # Evaluate model
-            unet2D.evaluate(test_dataset, save_path=out_path + f'Fold_{k+1}/pred/', batch_size=cfg.settings['train']['batch_size'],
-                            num_workers=cfg.settings['train']['num_workers'], device=cfg.settings['device'],
-                            print_progress=cfg.settings['print_progress'])
+            unet2D.evaluate(test_dataset, save_path=os.path.join(out_path, f'Fold_{k+1}/pred/'))
 
-            # Save models & train_stats
-            unet2D.save_model(out_path + f'Fold_{k+1}/trained_unet.pt')
-            logger.info("Trained U-Net saved at " + out_path + f"Fold_{k+1}/trained_unet.pt")
-            unet2D.save_train_stat(out_path + f'Fold_{k+1}/train_stat.json')
-            logger.info("Trained statistics saved at " + out_path + f"Fold_{k+1}/train_stat.json")
+            # Save models & outputs
+            unet2D.save_model(os.path.join(out_path, f'Fold_{k+1}/trained_unet.pt'))
+            logger.info("Trained U-Net saved at " + os.path.join(out_path, f'Fold_{k+1}/trained_unet.pt'))
+            unet2D.save_outputs(os.path.join(out_path, f'Fold_{k+1}/outputs.json'))
+            logger.info("Trained statistics saved at " + os.path.join(out_path, f'Fold_{k+1}/outputs.json'))
 
-            # append avergae dice/IoU to list
-            scores_list.append([unet2D.train_stat['eval']['dice']['all'], unet2D.train_stat['eval']['IoU']['all'],
-                                unet2D.train_stat['eval']['dice']['ICH'], unet2D.train_stat['eval']['IoU']['ICH']])
+            # delete checkpoint if exists
+            if os.path.exists(os.path.join(out_path, f'Fold_{k+1}/checkpoint.pt')):
+                os.remove(os.path.join(out_path, f'Fold_{k+1}/checkpoint.pt'))
+                logger.info('Checkpoint deleted.')
 
-            # delete checkpoint
-            os.remove(out_path + f'Fold_{k+1}/checkpoint_path.pt')
-            logger.info('Checkpoint deleted.')
-
-    # save mean +/- 1.96 std Dice and IoU in .txt file
+    # save mean +/- 1.96 std Dice in .txt file
+    scores_list = []
+    for k in range(cfg.settings['split']['n_fold']):
+        with open(os.path.join(out_path, f'Fold_{k+1}/outputs.json'), 'r') as f:
+            out = json.load(f)
+        scores_list.append([out['eval']['dice']['all'], out['eval']['dice']['ICH']])
     means = np.array(scores_list).mean(axis=0)
     CI95 = 1.96*np.array(scores_list).std(axis=0)
-    with open(out_path + 'average_scores.txt', 'w') as f:
+    with open(os.path.join(out_path, 'average_scores.txt'), 'w') as f:
         f.write(f'Dice = {means[0]} +/- {CI95[0]}\n')
-        f.write(f'IoU = {means[1]} +/- {CI95[1]}\n\n')
-        f.write(f'Dice (ICH) = {means[2]} +/- {CI95[2]}\n')
-        f.write(f'IoU (ICH) = {means[3]} +/- {CI95[3]}\n\n')
-    logger.info('Average Scores saved at ' + out_path + 'average_scores.txt')
+        f.write(f'Dice (ICH) = {means[1]} +/- {CI95[1]}\n')
+    logger.info('Average Scores saved at ' + os.path.join(out_path, 'average_scores.txt'))
 
     # generate dataframe of all prediction
-    df_list = [pd.read_csv(out_path + f'Fold_{i+1}/pred/volume_prediction_scores.csv') for i in range(cfg.settings['split']['n_fold'])]
+    df_list = [pd.read_csv(os.path.join(out_path, f'Fold_{i+1}/pred/volume_prediction_scores.csv')) for i in range(cfg.settings['split']['n_fold'])]
     all_df = pd.concat(df_list, axis=0).reset_index(drop=True)
-    all_df.to_csv(out_path + 'all_volume_prediction.csv')
-    logger.info('CSV of all volumes prediction saved at ' + out_path + 'all_volume_prediction.csv')
+    all_df.to_csv(os.path.join(out_path, 'all_volume_prediction.csv'))
+    logger.info('CSV of all volumes prediction saved at ' + os.path.join(out_path, 'all_volume_prediction.csv'))
 
     # Save config file
     cfg.settings['device'] = str(cfg.settings['device'])
-    cfg.save_config(out_path + 'config.json')
-    logger.info("Config file saved at " + out_path + "config.json")
+    cfg.save_config(os.path.join(out_path, 'config.json'))
+    logger.info("Config file saved at " + os.path.join(out_path, 'config.json'))
 
     # Analyse results
-    analyse_supervised_exp(out_path, cfg.settings['path']['DATA'], out_path + 'results_overview.pdf')
-    logger.info('Results overview figure saved at ' + out_path + 'results_overview.pdf')
+    analyse_supervised_exp(out_path, cfg.settings['path']['DATA'], os.path.join(out_path, 'results_overview.pdf'))
+    logger.info('Results overview figure saved at ' + os.path.join(out_path, 'results_overview.pdf'))
 
 def get_split_summary_table(all_df, train_df, test_df):
     """

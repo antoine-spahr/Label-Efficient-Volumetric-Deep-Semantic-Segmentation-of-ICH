@@ -17,7 +17,7 @@ import skimage.io as io
 import skimage.transform
 import json
 import glob
-
+import os
 import sys
 sys.path.append('../../')
 from src.utils.plot_utils import metric_barplot, curve_std, imshow_pred
@@ -36,23 +36,23 @@ def analyse_supervised_exp(exp_folder, data_path, save_fn='results_overview.pdf'
     ########## get data
     # get losses
     loss_list = []
-    for train_stat_fn in glob.glob(exp_folder + 'Fold_*/train_stat.json'):
+    for train_stat_fn in glob.glob(os.path.join(exp_folder, 'Fold_*/outputs.json')):
         with open(train_stat_fn, 'r') as fn:
             loss_list.append(np.array(json.load(fn)['train']['evolution']))
 
-    all = np.stack(loss_list, axis=2)[:,[1,2,4],:]
+    all = np.stack(loss_list, axis=2)[:,[1,2,3],:]
     data_evo = [np.concatenate([np.expand_dims(np.arange(1, all.shape[0]+1), axis=1), all[:,i,:]], axis=1) for i in range(all.shape[1])]
 
     # load performances
-    results_df = pd.read_csv(exp_folder + 'all_volume_prediction.csv')
+    results_df = pd.read_csv(os.path.join(exp_folder, 'all_volume_prediction.csv'))
     results_df = results_df.drop(columns=results_df.columns[0])
 
     # load performances at slice level
-    with open(exp_folder + 'config.json', 'r') as f:
+    with open(os.path.join(exp_folder, 'config.json'), 'r') as f:
         cfg = json.load(f)
     df_list = []
     for i in range(cfg['split']['n_fold']):
-        df_tmp = pd.read_csv(exp_folder + f'Fold_{i+1}/pred/slice_prediction_scores.csv')
+        df_tmp = pd.read_csv(os.path.join(exp_folder, f'Fold_{i+1}/pred/slice_prediction_scores.csv'))
         df_tmp['Fold'] = i+1
         df_list.append(df_tmp)
     slice_df = pd.concat(df_list, axis=0).reset_index(drop=True)
@@ -138,16 +138,16 @@ def analyse_supervised_exp(exp_folder, data_path, save_fn='results_overview.pdf'
             ax_i = fig.add_subplot(gs[k+3, i])
             axs.append(ax_i)
             # load image and window it
-            slice_im = io.imread(data_path + f'Patient_CT/{samp_row.PatientID:03}/{samp_row.Slice}.tif')
+            slice_im = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.PatientID:03}/{samp_row.Slice}.tif'))
             slice_im = window_ct(slice_im, win_center=cfg['data']['win_center'], win_width=cfg['data']['win_width'], out_range=(0,1))
             # load truth mask
             if is_ICH == 1:
-                slice_trg = io.imread(data_path + f'Patient_CT/{samp_row.PatientID:03}/{samp_row.Slice}_ICH_Seg.bmp')
+                slice_trg = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.PatientID:03}/{samp_row.Slice}_ICH_Seg.bmp'))
             else:
                 slice_trg = np.zeros_like(slice_im)
             slice_trg = slice_trg.astype('bool')
             # load prediction
-            slice_pred = io.imread(exp_folder + f'Fold_{samp_row.Fold}/pred/{samp_row.PatientID}/{samp_row.Slice}.bmp')
+            slice_pred = io.imread(os.path.join(exp_folder, f'Fold_{samp_row.Fold}/pred/{samp_row.PatientID}/{samp_row.Slice}.bmp'))
             slice_pred = skimage.transform.resize(slice_pred, slice_trg.shape, order=0)
             slice_pred = slice_pred.astype('bool')
             # plot all
@@ -177,4 +177,4 @@ def analyse_supervised_exp(exp_folder, data_path, save_fn='results_overview.pdf'
     fig.savefig(save_fn, dpi=300, bbox_inches='tight')
 
 
-#analyse_supervised_exp('../../../outputs/window_unet2D/UNet2D_13_10_input0.1_win200_150ep/', '../../../data/publicSegICH2D/', 'test.pdf')
+#analyse_supervised_exp('../../../outputs/UNet2D_Debug', '../../../data/publicSegICH2D/', 'test.pdf')

@@ -7,7 +7,6 @@ date : 28.09.2020
 
 TO DO :
 """
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -18,24 +17,27 @@ import skimage.io as io
 import time
 import logging
 import os
+import json
 from datetime import timedelta
 
 from src.models.optim.LossFunctions import BinaryDiceLoss
 from src.utils.tensor_utils import batch_binary_confusion_matrix
 from src.utils.print_utils import print_progessbar
 
-class UNet2D_trainer:
+class UNet2D:
     """
-    Utility class to train and evaluate a 2D UNet architecture for binary segmentation. The evaluation mehtod compute
-    the performances (Dice and IoU) for the 3D volume predictions.
+    Class defining a 2D UNet model to train and evaluate for binary segmentation as well as other utilities. The evaluation
+    mehtod compute the performances (Dice) for the 3D volume predictions.
     """
-    def __init__(self, n_epoch=150, batch_size=16, lr=1e-3, lr_scheduler=optim.lr_scheduler.ExponentialLR,
-        lr_scheduler_kwargs=dict(gamma=0.95), loss_fn=BinaryDiceLoss, loss_fn_kwargs=dict(reduction='mean'),
-        weight_decay=1e-6, num_workers=0, device='cuda', print_progress=False):
+    def __init__(self, unet, n_epoch=150, batch_size=16, lr=1e-3, lr_scheduler=optim.lr_scheduler.ExponentialLR,
+                 lr_scheduler_kwargs=dict(gamma=0.95), loss_fn=BinaryDiceLoss, loss_fn_kwargs=dict(reduction='mean'),
+                 weight_decay=1e-6, num_workers=0, device='cuda', print_progress=False):
         """
-        Build a UNet2D_trainer object.
+        Build a UNet2D object.
         ----------
         INPUT
+            |---- unet (nn.Module) the network to use in the model. It must take 2D input and genearte a 2D segmentation mask.
+            |           Has to output a tensor of shape similar as input (logit for each pixel as outputed by the sigmoid.)
             |---- n_epoch (int) the number of epoch for the training.
             |---- batch_size (int) the batch size to use for loading the data.
             |---- lr (float) the learning rate.
@@ -48,8 +50,9 @@ class UNet2D_trainer:
             |---- device (str) the device to use.
             |---- print_progress (bool) whether to print progress bar for batch processing.
         OUTPUT
-            |---- UNet_trainer () the trainer for the 2D UNet.
+            |---- UNet () the 2D UNet model.
         """
+        self.unet = unet
         # training parameters
         self.n_epoch = n_epoch
         self.batch_size = batch_size
@@ -64,19 +67,22 @@ class UNet2D_trainer:
         self.print_progress = print_progress
 
         # Results
-        self.train_time = None
-        self.train_evolution = None
-        self.eval_time = None
-        self.eval_dice = None # avg Volumetric Dice
-        self.eval_IoU = None # avg Volumetric IoU
+        self.outputs = {
+            'train':{
+                'time': None,
+                'evolution': None
+            },
+            'eval':{
+                'time': None,
+                'dice': None
+            }
+        }
 
-    def train(self, net, dataset, valid_dataset=None, checkpoint_path=None):
+    def train(self, dataset, valid_dataset=None, checkpoint_path=None):
         """
-        Train the passed network with the given dataset(s).
+        Train the network with the given dataset(s).
         ----------
         INPUT
-            |---- net (nn.Module) the network architecture to train. Has to output a tensor of shape similar as input
-            |           (logit for each pixel as outputed by the sigmoid.)
             |---- dataset (torch.utils.data.Dataset) the dataset to use for training. It must return an input image, a
             |           target binary mask, the patientID, and the slice number.
             |---- valid_dataset (torch.utils.data.Dataset) the optional validation dataset. If provided, the model is
@@ -86,24 +92,22 @@ class UNet2D_trainer:
             |---- net (nn.Module) the trained network.
         """
         logger = logging.getLogger()
-
         # make the dataloader
         train_loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True,
                                                    num_workers=self.num_workers)
         # put net to device
-        net = net.to(self.device)
-
+        self.unet = self.unet.to(self.device)
         # define optimizer
-        optimizer = optim.Adam(net.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-
+        optimizer = optim.Adam(self.unet.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         # define the lr scheduler
         scheduler = self.lr_scheduler(optimizer, **self.lr_scheduler_kwargs)
-
+        # define the loss function
+        loss_fn = self.loss_fn(**self.loss_fn_kwargs)
         # Load checkpoint if present
         try:
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
             n_epoch_finished = checkpoint['n_epoch_finished']
-            net.load_state_dict(checkpoint['net_state'])
+            self.unet.load_state_dict(checkpoint['net_state'])
             optimizer.load_state_dict(checkpoint['optimizer_state'])
             scheduler.load_state_dict(checkpoint['lr_state'])
             epoch_loss_list = checkpoint['loss_evolution']
@@ -113,16 +117,13 @@ class UNet2D_trainer:
             n_epoch_finished = 0
             epoch_loss_list = [] # Placeholder for epoch evolution
 
-        # define the loss function
-        loss_fn = self.loss_fn(**self.loss_fn_kwargs)
-
         # start training
         logger.info('Start training the U-Net 2D.')
         start_time = time.time()
         n_batch = len(train_loader)
 
         for epoch in range(n_epoch_finished, self.n_epoch):
-            net.train()
+            self.unet.train()
             epoch_loss = 0.0
             epoch_start_time = time.time()
 
@@ -135,38 +136,36 @@ class UNet2D_trainer:
                 # zero the networks' gradients
                 optimizer.zero_grad()
                 # optimize weights with backpropagation on the batch
-                pred = net(input)
+                pred = self.unet(input)
                 loss = loss_fn(pred, target)
                 loss.backward()
                 optimizer.step()
 
                 epoch_loss += loss.item()
-
                 # print process
                 if self.print_progress:
                     print_progessbar(b, n_batch, Name='\t\tTrain Batch', Size=40, erase=True)
 
             # Get validation performance if required
-            valid_dice, dice, IoU, dice_ICH, IoU_ICH = '', None, None, None, None
+            valid_dice = ''
             if valid_dataset:
-                dice, IoU, dice_ICH, IoU_ICH = self.evaluate(net, valid_dataset, return_score=True, print_to_logger=False, save_path=None)
-                valid_dice = f'| Valid Dice: {dice:.5f} | Valid IoU: {IoU:.5f} | Valid ICH Dice: {dice_ICH:.5f} | Valid ICH IoU: {IoU_ICH:.5f} '
+                self.evaluate(valid_dataset, print_to_logger=False, save_path=None)
+                valid_dice = f"| Valid Dice: {self.outputs['eval']['dice']['all']:.5f} " + \
+                             f"| Valid ICH Dice: {self.outputs['eval']['dice']['ICH']:.5f} "
 
             # log the epoch statistics
             logger.info(f'\t| Epoch: {epoch + 1:03}/{self.n_epoch:03} '
-                        f'| Train time: {time.time() - epoch_start_time:.3f} [s] '
+                        f'| Train time: {timedelta(seconds=int(time.time() - epoch_start_time))} '
                         f'| Train Loss: {epoch_loss / n_batch:.6f} ' + valid_dice +
                         f'| lr: {scheduler.get_last_lr()[0]:.7f} |')
             # Store epoch loss and epoch dice
-            epoch_loss_list.append([epoch+1, epoch_loss/n_batch, dice, IoU, dice_ICH, IoU_ICH])
-
+            epoch_loss_list.append([epoch+1, epoch_loss/n_batch, self.outputs['eval']['dice']['all'], self.outputs['eval']['dice']['ICH']])
             # update scheduler
             scheduler.step()
-
             # Save Checkpoint every 10 epochs
-            if (epoch+1) % 10 == 0 and checkpoint_path:
+            if (epoch+1) % 1 == 0 and checkpoint_path:
                 checkpoint = {'n_epoch_finished': epoch+1,
-                              'net_state': net.state_dict(),
+                              'net_state': self.unet.state_dict(),
                               'optimizer_state': optimizer.state_dict(),
                               'lr_state': scheduler.state_dict(),
                               'loss_evolution': epoch_loss_list}
@@ -174,31 +173,22 @@ class UNet2D_trainer:
                 logger.info('\tCheckpoint saved.')
 
         # End training
-        self.train_time = time.time() - start_time
-        self.train_evolution = epoch_loss_list
-        logger.info(f'Finished training U-Net 2D in {str(timedelta(seconds=self.train_time)):0>8}')
+        self.outputs['train']['time'] = time.time() - start_time
+        self.outputs['train']['evolution'] = epoch_loss_list
+        logger.info(f"Finished training U-Net 2D in {timedelta(seconds=int(self.outputs['train']['time']))}")
 
-        return net
-
-    def evaluate(self, net, dataset, return_score=False, print_to_logger=True, save_path=None):
+    def evaluate(self, dataset, print_to_logger=True, save_path=None):
         """
         Evaluate the network with the given dataset. The evaluation score is given for the 3D prediction.
         ----------
         INPUT
-            |---- net (nn.Module) the network architecture to train. Has to output a tensor of shape similar as input
-            |           (logit for each pixel as outputed by the sigmoid.)
             |---- dataset (torch.utils.data.Dataset) the dataset to use for training. It must return an input image, a
             |           target binary mask, the patientID and the slice number.
-            |---- return_score (bool) whether to return the mean Dice and mean IoU scores of 3D segmentation (for
-            |           the 2D case the Dice is computed on the concatenation of prediction for a patient).
             |---- print_to_logger (bool) whether to print information to the logger.
             |---- save_path (str) the folder path where to save segemntation map (as bitmap for each slice) and the
             |           preformance dataframe. If not provided (i.e. None) nothing is saved.
         OUTPUT
-            |---- (Dice) (float) the average Dice coefficient for the 3D segemntation.
-            |---- (IoU) (flaot) the average IoU coefficient for the 3D segementation.
-            |---- (Dice_ICH) (float) the average Dice coefficient for the 3D segmentation of ICH patient only.
-            |---- (IoU_ICH) (float) the average IoU coefficient for the 3D segmentation of ICH patient only.
+            |---- None
         """
         if print_to_logger:
             logger = logging.getLogger()
@@ -207,14 +197,14 @@ class UNet2D_trainer:
         loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=False,
                                              num_workers=self.num_workers)
         # put net on device
-        net = net.to(self.device)
+        self.unet = self.unet.to(self.device)
 
         # Evaluation
         if print_to_logger:
             logger.info('Start evaluating the UNet2D.')
         start_time = time.time()
         id_pred = {'PatientID':[], 'Slice':[], 'ICH':[], 'TP':[], 'TN':[], 'FP':[], 'FN':[], 'pred_fn':[]} # Placeholder for each 2D prediction scores
-        net.eval()
+        self.unet.eval()
         with torch.no_grad():
             for b, data in enumerate(loader):
                 # get data on device
@@ -222,7 +212,7 @@ class UNet2D_trainer:
                 input = input.to(self.device).float()
                 target = target.to(self.device).float()
                 # make prediction
-                pred = net(input)
+                pred = self.unet(input)
                 # threshold to binarize
                 pred = torch.where(pred >= 0.5, torch.ones_like(pred, device=self.device), torch.zeros_like(pred, device=self.device))
                 # get confusion matrix for each slice of each patient
@@ -232,8 +222,8 @@ class UNet2D_trainer:
                     pred_path = []
                     for id, s_nbr, pred_samp in zip(pID, slice_nbr, pred):
                         # save slice prediction if required
-                        os.makedirs(f'{save_path}/{id}/', exist_ok=True)
-                        io.imsave(f'{save_path}/{id}/{s_nbr}.bmp', pred_samp[0,:,:].cpu().numpy().astype(np.uint8)*255, check_contrast=False) # image are binary --> put in uint8 and scale to 255
+                        os.makedirs(os.path.join(save_path, f'{id}/'), exist_ok=True)
+                        io.imsave(os.path.join(save_path, f'{id}/{s_nbr}.bmp'), pred_samp[0,:,:].cpu().numpy().astype(np.uint8)*255, check_contrast=False) # image are binary --> put in uint8 and scale to 255
                         pred_path.append(f'{id}/{s_nbr}.bmp') # file name with patient and slice number
                 else:
                     pred_path = ['-']*pID.shape[0]
@@ -253,33 +243,84 @@ class UNet2D_trainer:
         # make DataFrame from ID_pred to compute Dice score per image and per volume
         result_df = pd.DataFrame(id_pred)
 
-        # compute Dice & Jaccard (IoU) per Slice + save DF if required
+        # compute Dice per Slice + save DF if required
         result_df['Dice'] = (2*result_df.TP + 1) / (2*result_df.TP + result_df.FP + result_df.FN + 1)
-        result_df['IoU'] = (result_df.TP + 1) / (result_df.TP + result_df.FP + result_df.FN + 1)
         if save_path:
-            result_df.to_csv(f'{save_path}/slice_prediction_scores.csv')
+            result_df.to_csv(os.path.join(save_path, 'slice_prediction_scores.csv'))
 
         # aggregate by patient TP/TN/FP/FN (sum) + recompute 3D Dice & Jaccard then take mean and return values
         result_3D_df = result_df[['PatientID', 'ICH', 'TP', 'TN', 'FP', 'FN']].groupby('PatientID').agg({'ICH':'max', 'TP':'sum', 'TN':'sum', 'FP':'sum', 'FN':'sum'})
         result_3D_df['Dice'] = (2*result_3D_df.TP + 1) / (2*result_3D_df.TP + result_3D_df.FP + result_3D_df.FN + 1)
-        result_3D_df['IoU'] = (result_3D_df.TP + 1) / (result_3D_df.TP + result_3D_df.FP + result_3D_df.FN + 1)
         if save_path:
-            result_3D_df.to_csv(f'{save_path}/volume_prediction_scores.csv')
+            result_3D_df.to_csv(os.path.join(save_path, 'volume_prediction_scores.csv'))
 
         # take average over ICH-positive patient only and all together
-        avg_results_ICH = result_3D_df.loc[result_3D_df.ICH == 1, ['Dice', 'IoU']].mean(axis=0)
-        avg_results = result_3D_df[['Dice', 'IoU']].mean(axis=0)
-        self.eval_time = time.time() - start_time
-        self.eval_dice = {'all':avg_results.Dice, 'ICH':avg_results_ICH.Dice}
-        self.eval_IoU = {'all':avg_results.IoU, 'ICH':avg_results_ICH.IoU}
+        avg_results_ICH = result_3D_df.loc[result_3D_df.ICH == 1, 'Dice'].mean(axis=0)
+        avg_results = result_3D_df.Dice.mean(axis=0)
+        self.outputs['eval']['time'] = time.time() - start_time
+        self.outputs['eval']['dice'] = {'all':avg_results, 'ICH':avg_results_ICH}
 
         if print_to_logger:
-            logger.info(f'Evaluation time: {str(timedelta(seconds=self.eval_time)):0>8}')
-            logger.info(f"Evaluation Dice: {self.eval_dice['all']:.5f}.")
-            logger.info(f"Evaluation IoU: {self.eval_IoU['all']:.5f}.")
-            logger.info(f"Evaluation Dice (ICH only): {self.eval_dice['ICH']:.5f}.")
-            logger.info(f"Evaluation IoU (ICH only): {self.eval_IoU['ICH']:.5f}.")
+            logger.info(f"Evaluation time: {timedelta(seconds=int(self.outputs['eval']['time']))}")
+            logger.info(f"Evaluation Dice: {self.outputs['eval']['dice']['all']:.5f}.")
+            logger.info(f"Evaluation Dice (ICH only): {self.outputs['eval']['dice']['ICH']:.5f}.")
             logger.info("Finished evaluating the U-Net 2D.")
 
-        if return_score:
-            return avg_results.Dice, avg_results.IoU, avg_results_ICH.Dice, avg_results_ICH.IoU
+    def transfer_weights(self, init_state_dict, verbose=False):
+        """
+        Initialize the network with the weights in the provided state dictionnary. The transfer is performed on the
+        matching keys of the provided state_dict and the network state_dict.
+        ----------
+        INPUT
+            |---- init_state_dict (dict (module:params)) the weights to initiliatize the network with. Only the matching
+            |           keys of the state_dict dictionnary will be transferred.
+            |---- verbose (bool) whether to display some summary of the transfer.
+        OUTPUT
+            |---- None
+        """
+        # get U-Net state dict
+        unet_dict = self.unet.state_dict()
+        # get common keys
+        to_transfer_state_dict = {k:w for k, w in init_state_dict.items() if k in unet_dict}
+        if verbose:
+            logger = logging.getLogger()
+            logger.info(f'{len(to_transfer_state_dict)} matching weight keys found on {len(init_state_dict)} to be tranferred to the U-Net ({len(unet_dict)} weight keys).')
+        # update U-Net weights
+        unet_dict.update(to_transfer_state_dict)
+        self.unet.load_state_dict(unet_dict)
+
+    def save_model(self, export_fn):
+        """
+        Save the model.
+        ----------
+        INPUT
+            |---- export_fn (str) the export path.
+        OUTPUT
+            |---- None
+        """
+        torch.save(self.unet.state_dict(), export_fn)
+
+    def load_model(self, import_fn, map_location='cpu'):
+        """
+        Load a model from the given path.
+        ----------
+        INPUT
+            |---- import_fn (str) path where to get the model.
+            |---- map_location (str) device on which to load the model.
+        OUTPUT
+            |---- None
+        """
+        loaded_state_dict = torch.load(import_fn, map_location=map_location)
+        self.unet.load_state_dict(loaded_state_dict)
+
+    def save_outputs(self, export_fn):
+        """
+        Save the outputs in JSON.
+        ----------
+        INPUT
+            |---- export_fn (str) path where to get the results.
+        OUTPUT
+            |---- None
+        """
+        with open(export_fn, 'w') as fn:
+            json.dump(self.outputs, fn)
