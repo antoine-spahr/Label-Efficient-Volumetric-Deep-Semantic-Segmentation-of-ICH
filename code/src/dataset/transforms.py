@@ -339,6 +339,238 @@ class HFlip:
         """
         return f"HFlip(p={self.p})"
 
+class VFlip:
+    """
+    Randomly flip the image and mask.
+    """
+    def __init__(self, p=0.5):
+        """
+        Build a vertical-flip transform.
+        ----------
+        INPUT
+            |---- p (float) probability of flipping. Must be in [0,1]
+        OUTPUT
+            |---- V-Flip tranform.
+        """
+        assert p >= 0 or p <= 1, f'Probability must be between 0 and 1. Given : {p}'
+        self.p = p
+
+    def __call__(self, image, mask=None):
+        """
+        Randomly flip vertically the np.array image and mask.
+        ----------
+        INPUT
+            |---- image (np.array) the image to convert.
+            |---- mask (np.array) the mask to convert.
+        OUTPUT
+            |---- image (np.array) the converted image.
+            |---- mask (np.array) the converted mask.
+        """
+        if np.random.random() < self.p:
+            image = np.array(np.flip(image, axis=0)) # reconvert in array to make it contiguous
+            if mask is not None:
+                mask = np.array(np.flip(mask, axis=0))
+
+        if mask is not None:
+            return image, mask
+        else:
+            return image
+
+    def __str__(self):
+        """
+        Transform printing format
+        """
+        return f"VFlip(p={self.p})"
+
+class GaussianBlur:
+    """
+    Randomly apply a gaussian blurring with random std.
+    """
+    def __init__(self, p=0.5, sigma=(0.1, 2.0)):
+        """
+        Build a to rotate transform.
+        ----------
+        INPUT
+            |---- p (float) probability of blurring.
+            |---- sigma (tuple) range of std.
+        OUTPUT
+            |---- Gaussian Blur transform
+        """
+        assert p >= 0 or p <= 1, f'Probability must be between 0 and 1. Given : {p}'
+        self.p = p
+        self.sigma = sigma
+
+    def __call__(self, image, mask=None):
+        """
+        Randomly blur the input image with a std sampled uniformly from the range of sigma. If provided, a mask is simply
+        passed without transformation.
+        ----------
+        INPUT
+            |---- image (PIL.Image) the image to adjust.
+            |---- mask (PIL.Image) the mask to pass.
+        OUTPUT
+            |---- image (np.array) the adjusted image.
+            |---- mask (np.array) the passed mask.
+        """
+        if np.random.random() < self.p:
+            s = np.random.uniform(low=self.sigma[0], high=self.sigma[1])
+            image = skimage.filters.gaussian(image, sigma=s)
+
+        if mask is not None:
+            return image, mask
+        else:
+            return image
+
+    def __str__(self):
+        """
+        Transform printing format
+        """
+        return f"GaussianBlur(sigma={self.sigma}, p={self.p})"
+
+class AdjustBrightness:
+    """
+    Randomly adjust brighness of image.
+    """
+    def __init__(self, p=0.5, low=-0.3, high=0.2):
+        """
+        Build a brighness adjustment transform.
+        ----------
+        INPUT
+            |---- p (float) probability of brighness adjustment.
+            |---- low (float) lower bound of the brighness factor. (negative : reduced brighness, positive : increase brightness).
+            |---- high (float) upper bound of the brighness factor. (negative : reduced brighness, positive : increase brightness).
+        OUTPUT
+            |---- Brightness adjust tranform.
+        """
+        assert p >= 0 or p <= 1, f'Probability must be between 0 and 1. Given : {p}'
+        assert low <= high, f'Low bounds must be lower than high bounds : {low} !< {high}'
+        self.low = low
+        self.high = high
+        self.p = p
+
+    def __call__(self, image, mask=None):
+        """
+        Randomly adjust brighness of the np.array image. A mask is just passed if given. The image range is expected to be [0,1].
+        ----------
+        INPUT
+            |---- image (np.array) the image to convert.
+            |---- mask (np.array) the mask to convert.
+        OUTPUT
+            |---- image (np.array) the converted image.
+            |---- mask (np.array) the converted mask.
+        """
+        if np.random.random() < self.p:
+            factor = np.random.uniform(low=self.low, high=self.high)
+            image = image + factor
+            image = np.clip(image, 0.0, 1.0)
+
+        if mask is not None:
+            return image, mask
+        else:
+            return image
+
+    def __str__(self):
+        """
+        Transform printing format
+        """
+        return f"AdjustBrightness(p={self.p}, low={self.low}, high={self.high})"
+
+class AdjustContrast:
+    """
+    Randomly adjust contrast of image.
+    """
+    def __init__(self, p=0.5, low=0.5, high=1.5):
+        """
+        Build a brighness adjustment transform.
+        ----------
+        INPUT
+            |---- p (float) probability of contrast adjustment.
+            |---- low (float) lower bound of the contrast factor. (<1 : reduced contrast, >1 : increase brightness).
+            |---- high (float) upper bound of the contrast factor. (<1 : reduced brighness, >1 : increase brightness).
+        OUTPUT
+            |---- Contrast adjust tranform.
+        """
+        assert p >= 0 or p <= 1, f'Probability must be between 0 and 1. Given : {p}'
+        assert low <= high, f'Low bounds must be lower than high bounds : {low} !< {high}'
+        self.low = low
+        self.high = high
+        self.p = p
+
+    def __call__(self, image, mask=None):
+        """
+        Randomly adjust contrast of the np.array image. A mask is just passed if given. The image range is expected to be [0,1].
+        ----------
+        INPUT
+            |---- image (np.array) the image to convert.
+            |---- mask (np.array) the mask to convert.
+        OUTPUT
+            |---- image (np.array) the converted image.
+            |---- mask (np.array) the converted mask.
+        """
+        if np.random.random() < self.p:
+            factor = np.random.uniform(low=self.low, high=self.high)
+            image = image * factor
+            image = np.clip(image, 0.0, 1.0)
+
+        if mask is not None:
+            return image, mask
+        else:
+            return image
+
+    def __str__(self):
+        """
+        Transform printing format
+        """
+        return f"AdjustContrast(p={self.p}, low={self.low}, high={self.high})"
+
+class RandomCropResize:
+    """
+    Randomly crop and resize the image.
+    """
+    def __init__(self, crop_scales=(0.2, 1.0)):
+        """
+        Build a to rotate transform.
+        ----------
+        INPUT
+            |---- crop_scales (tuple: (low, high)) the range of possible scale of the crop.
+        OUTPUT
+            |---- Random Crop and Resize transform
+        """
+        assert crop_scales[1] <= 1, f'The upper crop scale bound cannot be above 1. Given {crop_scales[1]}'
+        self.crop_scales = crop_scales
+
+    def __call__(self, image, mask=None):
+        """
+        Randomly crop and resize the input image and mask.
+        ----------
+        INPUT
+            |---- image (PIL.Image) the image to adjust.
+            |---- mask (PIL.Image) the mask to pass.
+        OUTPUT
+            |---- image (np.array) the adjusted image.
+            |---- mask (np.array) the passed mask.
+        """
+        # get crop parameter
+        image_size = image.shape
+        scale = np.random.uniform(low=self.crop_scales[0], high=self.crop_scales[1])
+        h, w = int(scale * image.shape[0]), int(scale * image.shape[1])
+        # sample crop position
+        i, j = np.random.randint(low=0, high=image.shape[0] - h), np.random.randint(low=0, high=image.shape[1] - w)
+        # crop & resize
+        image = skimage.transform.resize(image[i:i+h, j:j+w], (image_size[0], image_size[1], *image_size[2:]), order=1)
+
+        if mask is not None:
+            mask = skimage.transform.resize(mask[i:i+h, j:j+w], (mask[0], image_size[1], *image_size[2:]), order=0)
+            return image, mask
+        else:
+            return image
+
+    def __str__(self):
+        """
+        Transform printing format
+        """
+        return f"RandomCropResize(crop_scales={self.crop_scales})"
+
 class ToTorchTensor:
     """
     Convert the image (and mask) to a torch.Tensor.
@@ -452,6 +684,7 @@ class RandomPatchSwap:
         Transform printing format
         """
         return f"RandomPatchSwap(n={self.n}, w={self.w}, h={self.h})"
+
 
 
 

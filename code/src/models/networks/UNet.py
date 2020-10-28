@@ -187,6 +187,40 @@ class MLPHead(nn.Module):
         x = self.fc_layers[-1](x)
         return x
 
+class ConvHead(nn.Module):
+    """
+    Define a MLP projection head. Combination of Linear and ReLU
+    """
+    def __init__(self, channel_layer=[128, 256, 32], use_3D=False):
+        """
+        Build a Convolutional Head with the given structure of conv1x1 channels.
+        ----------
+        INPUT
+            |---- channel_layer (list of int) the convolutional head structure. Each entry defines the number of channels of
+            |           a given 1x1 convolution layer.
+            |---- use_3D (bool) whether to use 3D convolution or 2D.
+        OUTPUT
+            |---- Conv_head (nn.Module) the convolutional head
+        """
+        super(ConvHead, self).__init__()
+        conv = nn.Conv3d if use_3D else nn.Conv2d
+        self.conv_layers = nn.ModuleList(conv(in_channels=n_in, out_channels=n_out, kernel_size=1) for n_in, n_out in zip(channel_layer[:-1], channel_layer[1:]))
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        """
+        Forward pass of the convolutional projection head.
+        ----------
+        INPUT
+            |---- input (torch.Tensor) input to convolutional head with dimension (Batch x channel_layer[0] x input dim).
+        OUTPUT
+            |---- out (torch.Tensor) the output with dimension (Batch x channel_layer[-1] x output dim).
+        """
+        for linear in self.conv_layers[:-1]:
+            x = self.relu(linear(x))
+        x = self.conv_layers[-1](x)
+        return x
+
 class UNet_Encoder(nn.Module):
     """
     U-Net model as a Pytorch nn.Module. The class enables to build 2D and 3D U-Nets with different depth.
@@ -242,15 +276,107 @@ class UNet_Encoder(nn.Module):
             x = conv(x)
             #res_list.append(x)
             x = self.downpool(x)
+        # bottleneck convolution
+        x = self.bottleneck_block(x)
+        # MLP projection head
+        x = self.avg_pool(x)
+        if self.return_bottleneck:
+            x_bottleneck = x
+        out = self.mlp_head(torch.flatten(x, 1))
+
+        if self.return_bottleneck:
+            return out, x_bottleneck
+        else:
+            return out
+
+class Partial_UNet(nn.Module):
+    """
+    A partial U-Net model as a Pytorch nn.Module. It's composed of a U-Net encoder and only a partial decoder (to be used
+    in the local contrastive pretraining of Chaitanya 2020).
+    """
+    def __init__(self, depth=5, n_decoder=3, use_3D=False, bilinear=False, in_channels=1, head_channel=[64, 32], top_filter=64):
+        """
+        Build a 2D or 3D U-Net Module.
+        ----------
+        INPUT
+            |---- depth (int) the number of double convolution block to use including the bottleneck double-convolution.
+            |---- use_3D (bool) whether the U-Net should be built with 3D Convolution, Pooling, etc layers.
+            |---- bilinear (bool) whether to use Upsampling layer in the synthesis path, otherwise transposed convolutions
+            |           are used. If True, the upward double convolutional block takes care of reducing the number of
+            |           channels instead of the transposed convolution.
+            |---- in_channels (int) the number of input channels to the U-Net
+            |---- head_channel (list of int) the channel to use for the 1x1 convolution after the partial decoding. (length
+            |           of list defines the number of 1x1 convolutions)
+            |---- top_filter (int) the number of channels after the first double-convolution block.
+        OUTPUT
+            |---- U-Net (nn.Module) The U-Net.
+        """
+        super(Partial_UNet, self).__init__()
+        # Network attribute to return or not the bottleneck representation
+        self.return_bottleneck = False
+        # Initialize Modules Lists for the encoder, decoder, and upsampling blocks
+        self.down_block = nn.ModuleList()
+        self.up_samp = nn.ModuleList()
+        self.up_block = nn.ModuleList()
+        # define filter number for each block, after each down block the number of filters double, after each up block the number of filter is reduced
+        down_filter_list = [(in_channels, top_filter)] + [(top_filter*(2**d), top_filter*(2**(d+1))) for d in range(depth-2)]
+        bottleneck_filter = (top_filter*(2**(depth-2)), top_filter*(2**(depth-1)))
+        # only deconvolves partially
+        up_filter_list = [(top_filter*(2**d), top_filter*(2**(d-1))) for d in range(depth-1, depth-1-n_decoder, -1)]
+        self.n_decoder = n_decoder
+
+        # initialize down blocks
+        for down_ch in down_filter_list: #down_ch, up_ch in zip(down_filter_list, up_filter_list):
+            self.down_block.append(ConvBlock(down_ch[0], down_ch[1], mid_channels=down_ch[1]//2, use_3D=use_3D))
+        # initialize up block
+        for up_ch in up_filter_list:
+            # Define the synthesis strategy (trasnposed convolution vs upsampling)
+            if bilinear:
+                self.up_block.append(ConvBlock(int(1.5*up_ch[0]), up_ch[1], mid_channels=up_ch[1], use_3D=use_3D))
+                up_mode = 'trilinear' if use_3D else 'bilinear'
+                self.up_samp.append(nn.Upsample(scale_factor=2, mode=up_mode, align_corners=True))
+            else:
+                self.up_block.append(ConvBlock(up_ch[0], up_ch[1], mid_channels=up_ch[1], use_3D=use_3D))
+                convT = nn.ConvTranspose3d if use_3D else nn.ConvTranspose2d
+                self.up_samp.append(convT(up_ch[0], up_ch[1], kernel_size=2, stride=2))
+
+        # bottelneck convolutional block
+        self.bottleneck_block = ConvBlock(bottleneck_filter[0], bottleneck_filter[1], mid_channels=bottleneck_filter[1]//2, use_3D=use_3D)
+        # Down pooling module
+        self.downpool = nn.MaxPool3d(kernel_size=2, stride=2) if use_3D else nn.MaxPool2d(kernel_size=2, stride=2)
+        # define the final layer as a combbination of 1x1 convolution (~local MLP)
+        self.final_conv = ConvHead(channel_layer=[up_filter_list[-1][1]] + head_channel, use_3D=use_3D)
+
+    def forward(self, input):
+        """
+        Forward pass of the U-Net. Encoding and decoding with skip connections.
+        ----------
+        INPUT
+            |---- input (torch.Tensor) input to U-Net with dimension (Batch x Channels x Height x Width (x Depth)). The
+            |           input is 4D for U-Net2D and 5D for U-Net3D.
+        OUTPUT
+            |---- out (torch.Tensor) the segmentation output with dimension (Batch x N_classes x Height x Width (x Depth)).
+        """
+        # Encoder
+        x = input
+        res_list = []
+        for conv in self.down_block:
+            x = conv(x)
+            res_list.append(x)
+            x = self.downpool(x)
 
         # bottleneck convolution
         x = self.bottleneck_block(x)
         if self.return_bottleneck:
             x_bottleneck = x
 
-        # MLP projection head
-        x = self.avg_pool(x)
-        out = self.mlp_head(torch.flatten(x,1))
+        # Partial Decoder
+        for up, conv, res in zip(self.up_samp, self.up_block, res_list[::-1][:self.n_decoder]):
+            x = up(x) # convTranspose
+            x = conv(torch.cat([res, x], dim=1)) # concat + convolutional block
+
+        # final 1x1 convolution head
+        out = self.final_conv(x)
 
         if self.return_bottleneck:
             return out, x_bottleneck

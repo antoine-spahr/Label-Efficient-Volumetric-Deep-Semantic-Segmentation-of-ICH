@@ -6,11 +6,11 @@ date : 28.09.2020
 ----------
 
 TO DO :
-
+- Try if LocalInfoNCELoss works !
 """
-
 import torch
 import torch.nn as nn
+import numpy as np
 
 class BinaryDiceLoss(nn.Module):
     """
@@ -113,3 +113,176 @@ class ComboLoss(nn.Module):
             return combo_loss.sum()
         elif self.reduction == 'none':
             return combo_loss
+
+class InfoNCELoss(nn.Module):
+    """
+    Define a Pytorch Module for the InfoNCELoss.
+    """
+    def __init__(self, set_size, tau=0.5, device='cuda'):
+        """
+        Build an InfoNCE loss module.
+        ----------
+        INPUT
+            |---- set_size (int) the number of samples in the comparison set.
+            |---- tau (float) the temprature hyperparameter.
+            |---- device (str) the device to use.
+        OUTPUT
+            |---- InfoNCELoss (nn.Module) the contrastive loss module.
+        """
+        super(InfoNCELoss, self).__init__()
+        self.tau = tau
+        self.device = device
+        self.set_size = set_size
+        self.neg_mask = self.get_neg_mask(set_size)
+        self.criterion = nn.CrossEntropyLoss(reduction="sum")
+        self.similarity_f = nn.CosineSimilarity(dim=2)
+
+    def get_neg_mask(self, set_size):
+        """
+        Make a boolean mask of negative samples on the similarity matrix. negatives are all except main diagonal, and
+        lower and upper diagonal.
+        ----------
+        INPUT
+            |---- set_size (int) the number of samples in the comparison set.
+        OUTPUT
+            |---- neg_mask (torch.boolTensor) the mask of negative.
+        """
+        # negative sample of similarity matrix are all except those in diagonal and upper/lower diagonal
+        mask = torch.diag(torch.ones(2*set_size, device=self.device), diagonal=0)
+        mask = mask + torch.diag(torch.ones(set_size, device=self.device), diagonal=set_size)
+        mask = mask + torch.diag(torch.ones(set_size, device=self.device), diagonal=-set_size)
+        return ~mask.bool()
+
+    def forward(self, z1, z2):
+        """
+        Forward pass of the contrastive loss.
+        ----------
+        INPUT
+            |---- z1 (torch.tensor) representation of the first representations (set_size x embed).
+            |---- z2 (torch.tensor) representation of the second representations (set_size x embed).
+        OUTPUT
+            |---- loss (torch.tensor) the InfoNCE loss.
+        """
+        # concat both representation (2*Set_size x Embed)
+        p = torch.cat((z1, z2), dim=0)
+        # get similarity
+        sim = self.similarity_f(p.unsqueeze(0), p.unsqueeze(1)) / self.tau
+        # get positive and negative samples
+        pos_sample = torch.cat((torch.diag(sim, self.set_size), torch.diag(sim, -self.set_size)), dim=0).reshape(2*self.batch_size, 1)
+        neg_sample = sim[self.neg_mask].reshape(2*self.set_size, -1)
+        # make the logit and labels (= zero --> first element in logit to maximize)
+        logits = torch.cat((pos_sample, neg_sample), dim=1)
+        labels = torch.zeros(2 * self.set_size).to(self.device).long()
+        # compute loss
+        loss = self.criterion(logits, labels)
+        return loss / (2 * self.set_size)
+
+class LocalInfoNCELoss(nn.Module):
+    """
+    Define the extension of the InfoNCELoss for local structure as proposed in Chaitanya (2020). It enforces feature map
+    region of two representation to be mapped similarly in a decoonvolutional network. Region are selected randomly on
+    the feature map.
+    """
+    def __init__(self, tau=0.5, K=3, n_region=13, device='cuda'):
+        """
+        Build a Local InfoNCE loss module.
+        ----------
+        INPUT
+            |---- tau (float) temperature hyperparameter of InfoNCE loss.
+            |---- K (int) the size of the region to consider (region will be KxK).
+            |---- n_region (int) the number of region to consider within a feature map.
+            |---- device (str) the device to use
+        OUTPUT
+            |---- LocalInfoNCELoss (nn.Module) the local InfoNCE Loss.
+        """
+        super(LocalInfoNCELoss, self).__init__()
+        self.tau = tau
+        self.K = K
+        self.n_region = n_region
+        self.device = device
+
+        self.pos_mask, self.neg_mask = self.get_masks(n_region)
+        self.similarity_f = nn.CosineSimilarity(dim=3)
+        self.criterion = nn.CrossEntropyLoss(reduction='mean')
+
+    def get_masks(self, set_size):
+        """
+        Make a boolean mask of negative and positive samples on the similarity matrix. negatives are all except main diagonal, and
+        lower and upper diagonal.
+        ----------
+        INPUT
+            |---- set_size (int) the number of samples in the comparison set.
+        OUTPUT
+            |---- pos_mask (torch.boolTensor) the mask of positives.
+            |---- neg_mask (torch.boolTensor) the mask of negative.
+        """
+        pos_mask = torch.diag(torch.ones(set_size, device=self.device), diagonal=set_size)
+        pos_mask = pos_mask + torch.diag(torch.ones(set_size, device=self.device), diagonal=-set_size)
+        neg_mask = pos_mask + torch.diag(torch.ones(2*set_size, device=self.device), diagonal=0)
+        neg_mask = ~neg_mask.bool()
+        pos_mask = pos_mask.bool()
+
+        return pos_mask, neg_mask
+
+    def get_sample_region_mask(self, feature_shape):
+        """
+        Generate a mask of the size of the feature map (HxW) for each element in the batch. A region mask for a batch
+        element is a set of n_region non-overlapping squares of dimension KxK labeled by an ID between 1 and n_region.
+        Therefore each square has a different value on the mask.
+        ---------
+        INPUT
+            |---- feature_shape (tuple :(B, H, W, C)) the feature map dimension.
+        OUTPUT
+            |---- out (torch.tensor) the region mask with dimension B x H x W.
+        """
+        bs, H, W, C = feature_shape
+        # generate indices in a reduced size (K time smaller) for each batch element (no replacement within batch element)
+        idx_col = np.random.choice((H//self.K) * (W//self.K), self.n_region, replace=False)
+        idx = np.random.rand(bs, (H//self.K) * (W//self.K)).argsort(axis=1)[:,idx_col]
+        # define label of each region
+        val = torch.arange(1, self.n_region + 1).repeat(bs, 1)
+        mask = torch.zeros(bs, (H//self.K) * (W//self.K), device=self.device)
+        mask[np.repeat(np.arange(0, bs), self.n_region), idx.ravel()] = val.view(-1).float()
+        # reshape
+        mask = mask.view(bs, (H//self.K), (W//self.K))
+        # upsample to get KxK region
+        mask = torch.nn.functional.interpolate(mask.unsqueeze(0).unsqueeze(1).float(), scale_factor=(1,self.K,self.K), mode='nearest')[0,0,:,:]
+        # pad to output size
+        out = torch.zeros(feature_shape[:-1], device=self.device)
+        out[:,:mask.shape[1],:mask.shape[2]] = mask
+
+        return out
+
+    def forward(self, f1, f2):
+        """
+        Forward pass of the LocalInfoNCE loss.
+        ----------
+        INPUT
+            |---- f1 (torch.tensor) the first representation feature map as B x H x W x C.
+            |---- f2 (torch.tensor) the second representation feature map as B x H x W x C.
+        OUTPUT
+            |---- loss (torch.tensor) the local InfoNCELoss.
+        """
+        bs = f1.shape[0]
+        # get a mask of region to extract for each sample of batch : region mask -> B x H x W
+        region_mask = self.get_sample_region_mask(f1.shape)
+        # get indices of region positions for feature map indexation
+        indices = torch.cat([np.argwhere(region_mask==i) for i in range(1, self.n_region + 1)], dim=1)
+        # extract region of feature map. fir : B x A x K*K*C
+        f1r = f1[indices[0], indices[1], indices[2], :].view(self.n_region, bs, -1).permute(1,0,2)
+        f2r = f2[indices[0], indices[1], indices[2], :].view(self.n_region, bs, -1).permute(1,0,2)
+        # concat features map --> B x 2A x K*K*C
+        p = torch.cat((f1r, f2r), dim=1)
+        # compute cosine Similarity between KKC features --> sim : B x 2A x 2A
+        sim = self.similarity_f(p.unsqueeze(1), p.unsqueeze(2)) / self.tau
+        # get positive and negative samples from the similarity matrix
+        pos_sample = sim[self.pos_mask.repeat(bs, 1, 1)].view(bs, 2*self.n_region, -1)
+        neg_sample = sim[self.neg_mask.repeat(bs, 1, 1)].view(bs, 2*self.n_region, -1)
+        # concat to get logit and un-ravel the batch dimension
+        logits = torch.cat((pos_sample, neg_sample), dim=2).view(-1, 2*self.n_region-1)
+        # make labels for CE : positive on position 0 --> labels = 0
+        labels = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
+        # compute the CE entropy loss
+        loss = nn.CrossEntropyLoss(reduction='mean')(logits, labels)
+
+        return loss

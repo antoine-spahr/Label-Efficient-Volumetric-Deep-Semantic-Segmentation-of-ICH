@@ -70,7 +70,6 @@ def main(config_path):
                           shuffle=cfg.settings['split']['shuffle'],
                           random_state=seed)
     # iterate over folds and ensure that there are the same amount of ICH positive patient per fold --> Stratiffied CrossVal
-    #scores_list = [] # placeholder for mean test dice of each fold
     for k, (train_idx, test_idx) in enumerate(skf.split(patient_df.PatientNumber, patient_df.Hemorrhage)):
         # if fold results not already there
         if not os.path.exists(os.path.join(out_path, f'Fold_{k+1}/outputs.json')):
@@ -206,7 +205,7 @@ def main(config_path):
     logger.info("Config file saved at " + os.path.join(out_path, 'config.json'))
 
     # Analyse results
-    analyse_supervised_exp(out_path, cfg.settings['path']['DATA'], os.path.join(out_path, 'results_overview.pdf'))
+    analyse_supervised_exp(out_path, cfg.settings['path']['DATA'], cfg.settings['split']['n_fold'], os.path.join(out_path, 'results_overview.pdf'))
     logger.info('Results overview figure saved at ' + os.path.join(out_path, 'results_overview.pdf'))
 
 def get_split_summary_table(all_df, train_df, test_df):
