@@ -20,13 +20,15 @@ import glob
 import os
 import sys
 sys.path.append('../../')
-from src.utils.plot_utils import metric_barplot, curve_std, imshow_pred
+from src.utils.plot_utils import metric_barplot, curve_std, imshow_pred, plot_tsne
 from src.utils.ct_utils import window_ct
 
-def analyse_supervised_exp(exp_folder, data_path, save_fn='results_overview.pdf'):
+def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, save_fn='results_overview.pdf'):
     """
     Generate a summary figure of the supervised ICH segmentation experiment.
     """
+    if config_folder is None:
+        config_folder = exp_folder
     # utility function
     def h_padcat(arr1, arr2):
         out_len = max([arr1.shape[0], arr2.shape[0]])
@@ -48,10 +50,10 @@ def analyse_supervised_exp(exp_folder, data_path, save_fn='results_overview.pdf'
     results_df = results_df.drop(columns=results_df.columns[0])
 
     # load performances at slice level
-    with open(os.path.join(exp_folder, 'config.json'), 'r') as f:
+    with open(os.path.join(config_folder, 'config.json'), 'r') as f:
         cfg = json.load(f)
     df_list = []
-    for i in range(cfg['split']['n_fold']):
+    for i in range(n_fold):
         df_tmp = pd.read_csv(os.path.join(exp_folder, f'Fold_{i+1}/pred/slice_prediction_scores.csv'))
         df_tmp['Fold'] = i+1
         df_list.append(df_tmp)
@@ -176,5 +178,61 @@ def analyse_supervised_exp(exp_folder, data_path, save_fn='results_overview.pdf'
     # Save figure
     fig.savefig(save_fn, dpi=300, bbox_inches='tight')
 
+def analyse_representation_exp(exp_folder, save_fn='results_overview.pdf'):
+    """
+    Generate a summary figure of the self-supervised represntation learning for ICH.
+    """
+    out_path = '../outputs/ContextRestorationUNet2D_DEBUG_2_2020-10-22/'
+    # load the output file
+    with open(os.path.join(exp_folder, 'outputs.json'), 'r') as fn:
+        outputs_dict = json.load(fn)
+    # load eval csv
+    df = pd.read_csv(os.path.join(exp_folder, 'eval_data_info.csv'), index_col=0)
+    df_embed = pd.DataFrame(outputs_dict['eval']['repr'], columns=['idx', 'embed']).set_index('idx')
+    df_all = pd.merge(df, df_embed, left_index=True, right_index=True)
+    # get tsne embedding as np.array
+    embed = np.stack(df_all.embed.values, axis=0)
+
+    # Plot figure
+    fig = plt.figure(figsize=(10, 6))
+    gs = fig.add_gridspec(3, 10, height_ratios=[0.5, 0.2, 0.4])
+    # plot loss evolution
+    ax_loss = fig.add_subplot(gs[0, :5])
+    loss_evol = np.array(outputs_dict['train']['evolution'])
+    ax_loss.plot(loss_evol[:,0], loss_evol[:,1], lw=2, color='black')
+    ax_loss.set_xlim(left=1)
+    ax_loss.set_ylim(bottom=0)
+    ax_loss.spines['top'].set_visible(False)
+    ax_loss.spines['right'].set_visible(False)
+    ax_loss.set_xlabel('Epoch [-]')
+    ax_loss.set_ylabel('MSE Loss [-]')
+    ax_loss.set_title('Loss Evolution', fontsize=10, fontweight='bold', loc='left')
+    # plot tsne ICH vs No-ICH
+    ax_repr = fig.add_subplot(gs[0, 6:9])
+    plot_tsne(embed, df_all.Hemorrhage.values, colors=['xkcd:kelly green','xkcd:vermillion'], ax=ax_repr, scatter_kwargs=dict(s=1, marker='.', alpha=0.5),
+              legend=True, code_name={0: 'No ICH', 1: 'ICH'}, legend_kwargs=dict(loc='upper left', ncol=1, frameon=False, bbox_to_anchor=(1, 1), bbox_transform=ax_repr.transAxes))
+    ax_repr.set_title('Bottleneck t-SNE by ICH presence', fontsize=10, fontweight='bold', loc='center')
+    # plot tsne by subtype
+    axes_type = []
+    for i, ICH_type in enumerate(['epidural', 'intraparenchymal', 'intraventricular', 'subarachnoid', 'subdural']):
+        ax_type = fig.add_subplot(gs[2, 2*i:2*i+2])
+        axes_type.append(ax_type)
+        plot_tsne(embed, df_all[ICH_type].values, colors=['lightgray', 'xkcd:blood orange'], ax=ax_type, scatter_kwargs=dict(s=1, marker='.', alpha=0.5),
+                  legend=True if i==2 else False, code_name={0: 'No ICH type', 1: 'ICH type'},
+                  legend_kwargs=dict(loc='upper center', ncol=2, frameon=False, bbox_to_anchor=(0.5, -0.2), bbox_transform=ax_type.transAxes))
+        ax_type.text(0.5, -0.1, ICH_type, fontsize=10, fontweight='bold', ha='center', va='top', transform=ax_type.transAxes)
+
+    # add bracket
+    con = matplotlib.patches.ConnectionPatch(xyA=(0.5,0), xyB=(0,0.9), coordsA='axes fraction', coordsB='axes fraction',
+                                             axesA=ax_repr, axesB=axes_type[0], connectionstyle="Arc, angleA=-90, angleB=90, armA=30, armB=20, rad=20",
+                                             linewidth=1.5)
+    fig.add_artist(con)
+
+    con = matplotlib.patches.ConnectionPatch(xyA=(0.5,0), xyB=(1,0.9), coordsA='axes fraction', coordsB='axes fraction',
+                                             axesA=ax_repr, axesB=axes_type[-1], connectionstyle="Arc, angleA=-90, angleB=90, armA=30, armB=20, rad=20",
+                                             linewidth=1.5)
+    fig.add_artist(con)
+
+    fig.savefig(save_fn, dpi=300, bbox_inches='tight')
 
 #analyse_supervised_exp('../../../outputs/UNet2D_Debug', '../../../data/publicSegICH2D/', 'test.pdf')

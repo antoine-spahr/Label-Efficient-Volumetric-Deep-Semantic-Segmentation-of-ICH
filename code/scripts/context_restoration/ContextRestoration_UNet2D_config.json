@@ -1,0 +1,109 @@
+{
+  "exp_name": "ContextRestorationUNet2D",
+  "path":{
+    "data":{
+      "Sup": "../../../data/publicSegICH2D/",
+      "SSL": "../../../data/RSNA/"
+    },
+    "output": "../../../outputs/"
+  },
+  "device": null,
+  "n_thread": 0,
+  "seed": 42,
+  "print_progress": true,
+  "data":{
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256
+  },
+  "SSL":{
+    "dataset":{
+      "n_positive": -1,
+      "frac_negative": 0.0,
+      "n_eval": 3000,
+      "n_eval_neg": 1000,
+      "augmentation":{
+        "train":{
+          "Translate": {"low": -0.1, "high": 0.1},
+          "Rotate": {"low": -10, "high": 10},
+          "Scale": {"low": 0.9, "high": 1.1},
+          "HFlip": {"p": 0.5}
+        },
+        "eval":{}
+      },
+      "n_swap": 10,
+      "swap_h": 15,
+      "swap_w": 15
+    },
+    "net":{
+      "depth": 5,
+      "top_filter": 32,
+      "3D": false,
+      "in_channels": 1,
+      "out_channels": 1,
+      "bilinear": false,
+      "final_activation": false
+    },
+    "train":{
+      "model_path_to_load": null,
+      "loss_fn": "MSELoss",
+      "loss_fn_kwargs":{
+        "reduction": "mean"
+      },
+      "n_epoch": 100,
+      "batch_size": 32,
+      "lr": 1e-3,
+      "lr_scheduler": "ExponentialLR",
+      "lr_scheduler_kwargs": {
+        "gamma": 0.96
+      },
+      "weight_decay": 1e-6,
+      "num_workers": 4
+    }
+  },
+  "Sup":{
+    "dataset":{
+      "frac_negative": 2.0,
+      "augmentation":{
+        "train":{
+          "Translate": {"low": -0.1, "high": 0.1},
+          "Rotate": {"low": -10, "high": 10},
+          "Scale": {"low": 0.9, "high": 1.1},
+          "HFlip": {"p": 0.5}
+        },
+        "eval":{}
+      }
+    },
+    "split":{
+      "n_fold": 10,
+      "shuffle": true
+    },
+    "net":{
+      "depth": 5,
+      "top_filter": 32,
+      "3D": false,
+      "in_channels": 1,
+      "out_channels": 1,
+      "bilinear": false
+    },
+    "train":{
+      "model_path_to_load": null,
+      "loss_fn": "BinaryDiceLoss",
+      "loss_fn_kwargs":{
+        "alpha": 0.2,
+        "reduction": "mean",
+        "p": 2
+      },
+      "n_epoch": 100,
+      "batch_size": 16,
+      "lr": 1e-3,
+      "lr_scheduler": "ExponentialLR",
+      "lr_scheduler_kwargs": {
+        "gamma": 0.96
+      },
+      "weight_decay": 1e-6,
+      "num_workers": 4,
+      "validate_epoch": true
+    }
+  }
+}

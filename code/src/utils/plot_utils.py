@@ -371,3 +371,35 @@ def imshow_pred(im, pred, target=None, ax=None, im_cmap=None, pred_color='tomato
                    matplotlib.patches.Patch(facecolor=pred_color, alpha=pred_alpha)]
         labels = ['Ground Truth', 'Prediction']
         ax.legend(handles, labels, **legend_kwargs)
+
+def plot_tsne(embed, color_code, colors=None, ax=None, scatter_kwargs=dict(s=10, marker='o', alpha=0.8),
+              legend=False, code_name=None, legend_kwargs=None):
+    """
+    Plot a 2D embedding (ideally from t-SNE reduction).
+    ----------
+    INPUT
+        |---- embed (2D np.array) the embedding to plot (sample x 2).
+        |---- color_code (1D array) the class belonging of each samples in embed.
+        |---- colors (list of str) the color to use for each class (must have the same length as the number of class).
+        |               If None colors are picked randomly.
+        |---- ax (plt.axes) the ax on which to plot.
+        |---- scatter_kwargs (dict) the keyword arguments for the matplotlib scatter function.
+        |---- legend (bool) whether to add a legend
+        |---- code_name (dict) the name associated with each class.
+        |---- legend_kwargs (dict) the keyword argument to use for the legend.
+    OUTPUT
+        |---- None
+    """
+    ax = plt.gca() if ax is None else ax
+    n = len(np.unique(color_code))
+    if colors is None: colors = np.random.choice(list(matplotlib.colors.CSS4_COLORS.keys()), size=n)
+
+    labels, handles = [], []
+    for grp, color in zip(np.unique(color_code), colors):
+        labels.append(code_name[grp] if code_name is not None else grp)
+        handles.append(matplotlib.patches.Patch(facecolor=color, alpha=scatter_kwargs['alpha'] if 'alpha' in scatter_kwargs.keys() else 1))
+        ax.scatter(embed[color_code == grp, 0], embed[color_code == grp, 1], color=color, **scatter_kwargs)
+    ax.set_axis_off()
+
+    if legend:
+        ax.legend(handles, labels, **legend_kwargs)

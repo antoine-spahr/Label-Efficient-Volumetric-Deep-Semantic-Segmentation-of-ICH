@@ -163,7 +163,7 @@ class UNet2D:
             # update scheduler
             scheduler.step()
             # Save Checkpoint every 10 epochs
-            if (epoch+1) % 1 == 0 and checkpoint_path:
+            if (epoch+1) % 10 == 0 and checkpoint_path:
                 checkpoint = {'n_epoch_finished': epoch+1,
                               'net_state': self.unet.state_dict(),
                               'optimizer_state': optimizer.state_dict(),
