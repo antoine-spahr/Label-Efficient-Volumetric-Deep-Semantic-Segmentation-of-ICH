@@ -1,0 +1,149 @@
+{
+  "exp_name": "GlobalContrastiveUNet2D",
+  "path":{
+    "data":{
+      "Sup": "../../../data/publicSegICH2D/",
+      "SSL": "../../../data/RSNA/"
+    },
+    "output": "../../../outputs/"
+  },
+  "device": null,
+  "n_thread": 0,
+  "seed": 42,
+  "print_progress": true,
+  "data":{
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256
+  },
+  "SSL":{
+    "dataset":{
+      "n_positive": -1,
+      "frac_negative": 0.0,
+      "n_eval": 3000,
+      "n_eval_neg": 1000,
+      "augmentation":{
+        "train":{
+          "Translate": {"low": -0.1, "high": 0.1},
+          "Rotate": {"low": -15, "high": 15},
+          "Scale": {"low": 0.9, "high": 1.1}
+        },
+        "eval":{}
+      },
+      "contrastive_augmentation":{
+        "global":{
+          "HFlip": {"p": 0.5},
+          "AdjustContrast": {"p": 0.5, "low": 0.7, "high": 1.3},
+          "GaussianBlur": {"p": 0.5, "sigma": [0.1, 1.5]},
+          "RandomCropResize": {"crop_scales": [0.5, 1.0], "crop_ratios":[0.8, 1.25]}
+        },
+        "local":{
+          "AdjustContrast": {"p": 0.5, "low": 0.7, "high": 1.3},
+          "GaussianBlur": {"p": 0.5, "sigma": [0.1, 1.5]},
+          "RandomCropResize": {"crop_scales": [0.7, 1.0], "crop_ratios":[0.8, 1.25]}
+        }
+      }
+    },
+    "global":{
+      "net":{
+        "depth": 5,
+        "top_filter": 32,
+        "3D": false,
+        "in_channels": 1,
+        "MLP_head": [1024, 128]
+      },
+      "train":{
+        "model_path_to_load": null,
+        "loss_fn": "InfoNCELoss",
+        "loss_fn_kwargs":{
+          "tau": 0.1
+        },
+        "n_epoch": 50,
+        "batch_size": 64,
+        "lr": 1e-3,
+        "lr_scheduler": "ExponentialLR",
+        "lr_scheduler_kwargs": {
+          "gamma": 0.96
+        },
+        "weight_decay": 1e-6,
+        "num_workers": 12
+      }
+    },
+    "local":{
+      "skip": true,
+      "net":{
+        "depth": 5,
+        "n_decoder": 3,
+        "top_filter": 32,
+        "3D": false,
+        "in_channels": 1,
+        "head_channel": [128, 32],
+        "bilinear": false
+      },
+      "train":{
+        "model_path_to_load": null,
+        "loss_fn": "LocalInfoNCELoss",
+        "loss_fn_kwargs":{
+          "tau": 0.1,
+          "K": 3,
+          "n_region": 20
+        },
+        "n_epoch": 0,
+        "batch_size": 32,
+        "lr": 1e-3,
+        "lr_scheduler": "ExponentialLR",
+        "lr_scheduler_kwargs":{
+          "gamma": 0.96
+        },
+        "weight_decay": 1e-6,
+        "num_workers": 12,
+        "freeze": true
+      }
+    }
+  },
+  "Sup":{
+    "dataset":{
+      "frac_negative": 2.0,
+      "augmentation":{
+        "train":{
+          "Translate": {"low": -0.1, "high": 0.1},
+          "Rotate": {"low": -10, "high": 10},
+          "Scale": {"low": 0.9, "high": 1.1},
+          "HFlip": {"p": 0.5}
+        },
+        "eval":{}
+      }
+    },
+    "split":{
+      "n_fold": 10,
+      "shuffle": true
+    },
+    "net":{
+      "depth": 5,
+      "top_filter": 32,
+      "3D": false,
+      "in_channels": 1,
+      "out_channels": 1,
+      "bilinear": false
+    },
+    "train":{
+      "model_path_to_load": null,
+      "loss_fn": "BinaryDiceLoss",
+      "loss_fn_kwargs":{
+        "alpha": 0.2,
+        "reduction": "mean",
+        "p": 2
+      },
+      "n_epoch": 100,
+      "batch_size": 16,
+      "lr": 1e-3,
+      "lr_scheduler": "ExponentialLR",
+      "lr_scheduler_kwargs": {
+        "gamma": 0.96
+      },
+      "weight_decay": 1e-6,
+      "num_workers": 12,
+      "validate_epoch": true
+    }
+  }
+}

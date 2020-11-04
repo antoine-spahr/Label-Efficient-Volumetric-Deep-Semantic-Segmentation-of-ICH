@@ -32,8 +32,9 @@
         "eval":{}
       },
       "n_swap": 10,
-      "swap_h": 15,
-      "swap_w": 15
+      "swap_h": null,
+      "swap_w": [10,30],
+      "swap_rotate": true
     },
     "net":{
       "depth": 5,

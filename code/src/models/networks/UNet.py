@@ -349,7 +349,7 @@ class Partial_UNet(nn.Module):
 
     def forward(self, input):
         """
-        Forward pass of the U-Net. Encoding and decoding with skip connections.
+        Forward pass of the partial U-Net. Encoding and decoding with skip connections.
         ----------
         INPUT
             |---- input (torch.Tensor) input to U-Net with dimension (Batch x Channels x Height x Width (x Depth)). The

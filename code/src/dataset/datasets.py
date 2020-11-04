@@ -7,6 +7,7 @@ date : 29.09.2020
 
 TO DO :
 """
+import os
 import pandas as pd
 import numpy as np
 import skimage.io as io
@@ -165,6 +166,75 @@ class public_SegICH_Dataset3D(data.Dataset):
 
         return ct_vol, mask.bool(), pID
 
+class brain_extract_Dataset2D(data.Dataset):
+    """
+    Define a torch dataset enabling to load 2D CT and brain mask.
+    """
+    def __init__(self, data_df, data_path, augmentation_transform=[tf.Translate(low=-0.1, high=0.1), tf.Rotate(low=-10, high=10),
+                 tf.Scale(low=0.9, high=1.1), tf.HFlip(p=0.5)], window=None, output_size=256):
+        """
+        Build a dataset for the 2D annotated segmentation of brain.
+        ----------
+        INPUT
+            |---- data_df (pd.DataFrame) the input dataframe of samples. Each row must contains a volume number, a slice
+            |           number, an image filename and a mask filename.
+            |---- data_path (str) path to the root of the dataset folder (until where the samples' filnames begins).
+            |---- augmentation_transform (list of transofrom) data augmentation transformation to apply.
+            |---- window (tuple (center, width)) the window for CT intensity rescaling. If None, no windowing is performed.
+            |---- output_size (int) the dimension of the output (H = W).
+        OUTPUT
+            |---- brain_Dataset2D (torch.Dataset) the 2D dataset.
+        """
+        super(brain_extract_Dataset2D, self).__init__()
+        self.data_df = data_df
+        self.data_path = data_path
+        self.window = window
+
+        self.transform = tf.Compose(*augmentation_transform,
+                                    tf.Resize(H=output_size, W=output_size),
+                                    tf.ToTorchTensor())
+
+    def __len__(self):
+        """
+        Return the number of samples in the dataset.
+        ----------
+        INPUT
+            |---- None
+        OUTPUT
+            |---- N (int) the number of samples in the dataset.
+        """
+        return len(self.data_df)
+
+    def __getitem__(self, idx):
+        """
+        Extract the CT and corresponding mask sepcified by idx.
+        ----------
+        INPUT
+            |---- idx (int) the sample index in self.data_df.
+        OUTPUT
+            |---- slice (torch.tensor) the CT image with dimension (1 x H x W).
+            |---- mask (torch.tensor) the segmentation mask with dimension (1 x H x W).
+            |---- patient_nbr (torch.tensor) the patient id as a single value.
+            |---- slice_nbr (torch.tensor) the slice number as a single value.
+        """
+        # load image
+        slice = io.imread(os.path.join(self.data_path, self.data_df.iloc[idx].ct_fn))
+        if self.window:
+            slice = window_ct(slice, win_center=self.window[0], win_width=self.window[1], out_range=(0,1))
+        # load mask if one, else make a blank array
+        if self.data_df.iloc[idx].mask_fn == 'None':
+            mask = np.zeros_like(slice)
+        else:
+            mask = io.imread(os.path.join(self.data_path, self.data_df.iloc[idx].mask_fn))
+        # get the patient id
+        vol_id = torch.tensor(self.data_df.iloc[idx].volume)
+        # get slice number
+        slice_nbr = torch.tensor(self.data_df.iloc[idx].slice)
+
+        # Apply the transform : Data Augmentation + image formating
+        slice, mask = self.transform(slice, mask)
+
+        return slice, mask, vol_id, slice_nbr
 
 class RSNA_dataset(data.Dataset):
     """
@@ -172,7 +242,7 @@ class RSNA_dataset(data.Dataset):
     """
     def __init__(self, data_df, data_path, augmentation_transform=[tf.Translate(low=-0.1, high=0.1), tf.Rotate(low=-10, high=10),
                  tf.Scale(low=0.9, high=1.1), tf.HFlip(p=0.5)], window=None, output_size=256,
-                 mode='standard', n_swap=10, swap_w=15, swap_h=15, contrastive_augmentation=None):
+                 mode='standard', n_swap=10, swap_w=15, swap_h=15, swap_rot=False, contrastive_augmentation=None):
         """
         Build a dataset for the RSNA dataset of ICH CT slice.
         ----------
@@ -189,6 +259,7 @@ class RSNA_dataset(data.Dataset):
             |---- n_swap (int) the number of swap to use in the context_restoration mode.
             |---- swap_h (int) the height of the swapped patch in the context_restoration mode.
             |---- swap_w (int) the width of the swapped patch in the context_restoration mode.
+            |---- swap_rot (bool) whether to rotate patches. If true, swap_h must be None.
             |---- contrastive_augmentation (list of transformation) the list of augmentation to apply in the contrastive
             |           mode. They must be composable by tf.Compose.
         OUTPUT
@@ -206,10 +277,9 @@ class RSNA_dataset(data.Dataset):
                                     #tf.ToTorchTensor())
         self.toTensor = tf.ToTorchTensor()
         if mode == 'context_restoration':
-            self.swap_tranform = tf.RandomPatchSwap(n=n_swap, w=swap_w, h=swap_h)
+            self.swap_tranform = tf.RandomPatchSwap(n=n_swap, w=swap_w, h=swap_h, rotate=swap_rot)
         elif mode == 'contrastive':
-            self.contrastive_transform = tf.Compose()
-            raise NotImplementedError
+            self.contrastive_transform = tf.Compose(*contrastive_augmentation)
 
     def __len__(self):
         """
@@ -239,18 +309,21 @@ class RSNA_dataset(data.Dataset):
         # Window the CT-scan
         if self.window:
             im = window_ct(im, win_center=self.window[0], win_width=self.window[1], out_range=(0,1))
-        # transform image
-        im = self.transform(im)
+
         if self.mode == 'standard':
             # load label
             #lab = self.data_df.iloc[idx].Hemorrhage
+            # transform image
+            im = self.transform(im)
             return self.toTensor(im), torch.tensor(idx) #torch.tensor(lab), torch.tensor(idx)
         elif self.mode == 'context_restoration':
             # generate corrupeted version
+            # transform image
+            im = self.transform(im)
             swapped_im = self.swap_tranform(im)
             return self.toTensor(im), self.toTensor(swapped_im), torch.tensor(idx)
         elif self.mode == 'contrastive':
             # augmente image twice
-            im1 = self.contrastive_transform(im)
-            im2 = self.contrastive_transform(im)
+            im1 = self.contrastive_transform(self.transform(im))
+            im2 = self.contrastive_transform(self.transform(im))
             return self.toTensor(im1), self.toTensor(im2), torch.tensor(idx)

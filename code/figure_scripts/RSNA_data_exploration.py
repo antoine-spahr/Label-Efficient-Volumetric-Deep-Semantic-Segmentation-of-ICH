@@ -18,6 +18,7 @@ import skimage
 import imageio
 
 from src.utils.plot_utils import draw_cruved_rect
+from src.utils.ct_utils import window_ct
 
 #%%#####################################################################################################################
 # Load CSV
@@ -91,16 +92,3 @@ ax_in.patch.set_alpha(0.5)
 
 fig.savefig('../../figures/RSNA_data_exploration/data_stats.pdf', dpi=300, bbox_inches='tight')
 plt.show()
-#%%
-
-
-
-
-
-
-
-
-
-
-
-#

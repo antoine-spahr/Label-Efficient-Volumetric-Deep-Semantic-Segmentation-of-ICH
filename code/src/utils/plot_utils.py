@@ -11,6 +11,7 @@ TO DO :
 
 import matplotlib.pyplot as plt
 import matplotlib
+import pyvista as pv
 import numpy as np
 import skimage.io as io
 import skimage
@@ -338,7 +339,7 @@ def add_stat_significance(pairs, data, serie_names, group_names, w=None, mode='a
         ax.set_ylim([0, heights_arr.max()])
 
 def imshow_pred(im, pred, target=None, ax=None, im_cmap=None, pred_color='tomato', target_color='forestgreen',
-                pred_alpha=0.8, target_alpha=0.8, legend=True, legend_kwargs=None):
+                pred_alpha=0.8, target_alpha=0.8, imshow_kwargs=dict(aspect='equal'), legend=True, legend_kwargs=None):
     """
 
     """
@@ -353,16 +354,16 @@ def imshow_pred(im, pred, target=None, ax=None, im_cmap=None, pred_color='tomato
     ax = plt.gca() if ax is None else ax
     ax.set_axis_off()
     # plot image
-    ax.imshow(im, cmap=im_cmap)
+    ax.imshow(im, cmap=im_cmap, **imshow_kwargs)
     # show target
     if target is not None:
         if np.any(target):
             ax.imshow(np.ma.masked_where(target == False, target), cmap=matplotlib.colors.ListedColormap([target_color]),
-                      alpha=target_alpha, aspect='equal')
+                      alpha=target_alpha, **imshow_kwargs)
     # show pred
     if np.any(pred):
         ax.imshow(np.ma.masked_where(pred == False, pred), cmap=matplotlib.colors.ListedColormap([pred_color]),
-                  alpha=pred_alpha, aspect='equal')
+                  alpha=pred_alpha, **imshow_kwargs)
 
     if legend:
         if not legend_kwargs:

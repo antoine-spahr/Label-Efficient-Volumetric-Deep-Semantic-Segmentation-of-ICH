@@ -86,7 +86,7 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
     ax_cm = fig.add_subplot(gs[1,5:7])
     ax_cm_bis = fig.add_subplot(gs[0,5:7])
     # make data
-    data_cm = [results_df[['TP', 'TN', 'FP', 'FN']].values, results_df.loc[results_df.ICH == 1, ['TP', 'TN', 'FP', 'FN']].values, results_df.loc[results_df.ICH == 0, ['TP', 'TN', 'FP', 'FN']].values]
+    data_cm = [results_df[['TP', 'TN', 'FP', 'FN']].values, results_df.loc[results_df.label == 1, ['TP', 'TN', 'FP', 'FN']].values, results_df.loc[results_df.label == 0, ['TP', 'TN', 'FP', 'FN']].values]
     serie_names_cm = ['All', 'ICH only', 'Non-ICH only']
     group_names_cm = ['TP', 'TN', 'FP', 'FN']
     colors_cm = ['tomato', 'dodgerblue', 'cornflowerblue']
@@ -115,8 +115,8 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
 
     # Dice barplot
     ax_dice = fig.add_subplot(gs[0:2,8:])
-    data_dice = [h_padcat(h_padcat(results_df[['Dice']].values, results_df.loc[results_df.ICH == 1, ['Dice']].values), results_df.loc[results_df.ICH == 0, ['Dice']].values),
-                 h_padcat(h_padcat(slice_df[['Dice']].values, slice_df.loc[slice_df.ICH == 1, ['Dice']].values), slice_df.loc[slice_df.ICH == 0, ['Dice']].values)]
+    data_dice = [h_padcat(h_padcat(results_df[['Dice']].values, results_df.loc[results_df.label == 1, ['Dice']].values), results_df.loc[results_df.label == 0, ['Dice']].values),
+                 h_padcat(h_padcat(slice_df[['Dice']].values, slice_df.loc[slice_df.label == 1, ['Dice']].values), slice_df.loc[slice_df.label == 0, ['Dice']].values)]
 
     group_names_dice = ['All', 'ICH only', 'Non-ICH only']
     serie_names_dice = ['Volume Dice', 'Slice Dice']
@@ -133,29 +133,29 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
     # Pred sample Highest Dice with ICH
     for k, (asc, is_ICH) in enumerate(zip([False, True, False, True], [1, 1, 0, 0])):
         # get n_samp highest/lowest dice for ICH
-        samp_df = slice_df[slice_df.ICH == is_ICH].sort_values(by='Dice', ascending=asc).iloc[:n_samp,:]
+        samp_df = slice_df[slice_df.label == is_ICH].sort_values(by='Dice', ascending=asc).iloc[:n_samp,:]
         axs = []
         for i, samp_row in enumerate(samp_df.iterrows()):
             samp_row = samp_row[1]
             ax_i = fig.add_subplot(gs[k+3, i])
             axs.append(ax_i)
             # load image and window it
-            slice_im = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.PatientID:03}/{samp_row.Slice}.tif'))
+            slice_im = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}.tif'))
             slice_im = window_ct(slice_im, win_center=cfg['data']['win_center'], win_width=cfg['data']['win_width'], out_range=(0,1))
             # load truth mask
             if is_ICH == 1:
-                slice_trg = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.PatientID:03}/{samp_row.Slice}_ICH_Seg.bmp'))
+                slice_trg = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}_ICH_Seg.bmp'))
             else:
                 slice_trg = np.zeros_like(slice_im)
             slice_trg = slice_trg.astype('bool')
             # load prediction
-            slice_pred = io.imread(os.path.join(exp_folder, f'Fold_{samp_row.Fold}/pred/{samp_row.PatientID}/{samp_row.Slice}.bmp'))
+            slice_pred = io.imread(os.path.join(exp_folder, f'Fold_{samp_row.Fold}/pred/{samp_row.volID}/{samp_row.slice}.bmp'))
             slice_pred = skimage.transform.resize(slice_pred, slice_trg.shape, order=0)
             slice_pred = slice_pred.astype('bool')
             # plot all
             imshow_pred(slice_im, slice_pred, target=slice_trg, ax=ax_i, im_cmap='gray', pred_color='xkcd:vermillion', target_color='forestgreen',
                         pred_alpha=0.7, target_alpha=1, legend=False, legend_kwargs=None)
-            ax_i.text(0, 1.1, f' {samp_row.PatientID:03} / {samp_row.Slice:02}', fontsize=10, fontweight='bold', color='white', ha='left', va='top', transform=ax_i.transAxes)
+            ax_i.text(0, 1.1, f' {samp_row.volID:03} / {samp_row.slice:02}', fontsize=10, fontweight='bold', color='white', ha='left', va='top', transform=ax_i.transAxes)
 
         pos = axs[0].get_position()
         pos3 = axs[1].get_position()
@@ -182,7 +182,6 @@ def analyse_representation_exp(exp_folder, save_fn='results_overview.pdf'):
     """
     Generate a summary figure of the self-supervised represntation learning for ICH.
     """
-    out_path = '../outputs/ContextRestorationUNet2D_DEBUG_2_2020-10-22/'
     # load the output file
     with open(os.path.join(exp_folder, 'outputs.json'), 'r') as fn:
         outputs_dict = json.load(fn)
@@ -235,4 +234,5 @@ def analyse_representation_exp(exp_folder, save_fn='results_overview.pdf'):
 
     fig.savefig(save_fn, dpi=300, bbox_inches='tight')
 
-#analyse_supervised_exp('../../../outputs/UNet2D_Debug', '../../../data/publicSegICH2D/', 'test.pdf')
+
+#analyse_supervised_exp('../../../outputs/Supervised/UNet2D_21_10_frac2.0_scale0.2_depth6/', '../../../data/publicSegICH2D/', n_fold=10, config_folder=None, save_fn='../../../outputs/Supervised/UNet2D_21_10_frac2.0_scale0.2_depth6/results_overview.pdf')

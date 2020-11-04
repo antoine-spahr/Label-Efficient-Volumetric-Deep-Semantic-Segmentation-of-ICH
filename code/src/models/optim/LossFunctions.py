@@ -118,7 +118,7 @@ class InfoNCELoss(nn.Module):
     """
     Define a Pytorch Module for the InfoNCELoss.
     """
-    def __init__(self, set_size, tau=0.5, device='cuda'):
+    def __init__(self, set_size=None, tau=0.5, device='cuda'):
         """
         Build an InfoNCE loss module.
         ----------
@@ -129,6 +129,7 @@ class InfoNCELoss(nn.Module):
         OUTPUT
             |---- InfoNCELoss (nn.Module) the contrastive loss module.
         """
+        assert set_size is not None, 'The set size is a mandatory parameter'
         super(InfoNCELoss, self).__init__()
         self.tau = tau
         self.device = device
@@ -168,7 +169,7 @@ class InfoNCELoss(nn.Module):
         # get similarity
         sim = self.similarity_f(p.unsqueeze(0), p.unsqueeze(1)) / self.tau
         # get positive and negative samples
-        pos_sample = torch.cat((torch.diag(sim, self.set_size), torch.diag(sim, -self.set_size)), dim=0).reshape(2*self.batch_size, 1)
+        pos_sample = torch.cat((torch.diag(sim, self.set_size), torch.diag(sim, -self.set_size)), dim=0).reshape(2*self.set_size, 1)
         neg_sample = sim[self.neg_mask].reshape(2*self.set_size, -1)
         # make the logit and labels (= zero --> first element in logit to maximize)
         logits = torch.cat((pos_sample, neg_sample), dim=1)

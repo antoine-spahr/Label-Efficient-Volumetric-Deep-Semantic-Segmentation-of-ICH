@@ -1,10 +1,10 @@
 {
-  "exp_name": "UNet2D_frac2.0_scale0.2",
+  "exp_name": "UNet2Dbrain",
   "path": {
-    "DATA": "../../../data/publicSegICH2D/",
-    "OUTPUT": "../../../outputs/supervised/"
+    "DATA": "../../../data/brain_extract_2D/",
+    "OUTPUT": "../../../outputs/brain/"
   },
-  "device": "cuda:1",
+  "device": null,
   "n_thread": 0,
   "seed": 42,
   "print_progress": true,
@@ -33,11 +33,8 @@
       "eval": {}
     }
   },
-  "dataset": {
-    "frac_negative": 2
-  },
   "split": {
-    "n_fold": 10,
+    "n_fold": 5,
     "shuffle": true
   },
   "net": {
@@ -50,14 +47,15 @@
   },
   "train": {
     "model_path_to_load": null,
+    "init_weight": null,
     "loss_fn": "BinaryDiceLoss",
     "loss_fn_kwargs": {
       "reduction": "mean",
       "p": 2,
-      "alpha": 0.2
+      "alpha": 1.0
     },
     "n_epoch": 100,
-    "batch_size": 16,
+    "batch_size": 32,
     "lr": 0.001,
     "lr_scheduler": "ExponentialLR",
     "lr_scheduler_kwargs": {

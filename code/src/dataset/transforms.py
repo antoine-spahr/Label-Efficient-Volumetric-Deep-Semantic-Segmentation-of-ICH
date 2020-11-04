@@ -11,8 +11,11 @@ TO DO :
 """
 import torchvision.transforms
 import torch
+import math
+import random
 import numpy as np
 import skimage.transform
+import skimage.filters
 import scipy.ndimage
 
 class Compose:
@@ -20,7 +23,7 @@ class Compose:
     Compose, in a sequential fashion, multiple transforms than can handle an
     image and a mask in their __call__.
     """
-    def __init__(self, *transformations, pass_mask=True):
+    def __init__(self, *transformations):
         """
         Build a sequential composition of transforms.
         ----------
@@ -59,6 +62,13 @@ class Compose:
         max_size = max(len(x) for x in tf_names)
         link = '\n' + '|'.center(max_size) + '\n' + 'V'.center(max_size) + '\n'
         return link.join([t.center(max_size) for t in tf_names])
+
+    def __add__(self, other):
+        """
+        Define how to sum composition.
+        """
+        return Compose(*(self.transformations + other.transformations))
+
 
 class RandomZCrop:
     """
@@ -527,17 +537,19 @@ class RandomCropResize:
     """
     Randomly crop and resize the image.
     """
-    def __init__(self, crop_scales=(0.2, 1.0)):
+    def __init__(self, crop_scales=(0.2, 1.0), crop_ratios=(3./4., 4./3.)):
         """
         Build a to rotate transform.
         ----------
         INPUT
             |---- crop_scales (tuple: (low, high)) the range of possible scale of the crop.
+            |---- crop_ratios (tuple: (low, high)) the range of possible aspect ratio in the crop.
         OUTPUT
             |---- Random Crop and Resize transform
         """
         assert crop_scales[1] <= 1, f'The upper crop scale bound cannot be above 1. Given {crop_scales[1]}'
         self.crop_scales = crop_scales
+        self.crop_ratios = crop_ratios
 
     def __call__(self, image, mask=None):
         """
@@ -552,10 +564,11 @@ class RandomCropResize:
         """
         # get crop parameter
         image_size = image.shape
-        scale = np.random.uniform(low=self.crop_scales[0], high=self.crop_scales[1])
-        h, w = int(scale * image.shape[0]), int(scale * image.shape[1])
-        # sample crop position
-        i, j = np.random.randint(low=0, high=image.shape[0] - h), np.random.randint(low=0, high=image.shape[1] - w)
+        # scale = np.random.uniform(low=self.crop_scales[0], high=self.crop_scales[1])
+        # h, w = int(scale * image.shape[0]), int(scale * image.shape[1])
+        # # sample crop position
+        # i, j = np.random.randint(low=0, high=image.shape[0] - h), np.random.randint(low=0, high=image.shape[1] - w)
+        i, j, h, w = self.get_params(image_size, self.crop_scales, self.crop_ratios)
         # crop & resize
         image = skimage.transform.resize(image[i:i+h, j:j+w], (image_size[0], image_size[1], *image_size[2:]), order=1)
 
@@ -565,11 +578,53 @@ class RandomCropResize:
         else:
             return image
 
+    def get_params(self, img_size, scale, ratio):
+        """
+        Compute position and size of crop. (method from torchvision).
+        ----------
+        INPUT
+            |---- img_size (tuple (h,w)) the image size.
+            |---- scale (tuple) range of size of the origin size cropped
+            |---- ratio (tuple) range of aspect ratio of the origin aspect ratio cropped
+        OUTPUT
+            |---- params (tuple :(i, j, h, w)) crop position and size.
+        """
+        height, width = img_size
+        area = height * width
+
+        for _ in range(10):
+            target_area = random.uniform(*scale) * area
+            log_ratio = (math.log(ratio[0]), math.log(ratio[1]))
+            aspect_ratio = math.exp(random.uniform(*log_ratio))
+
+            w = int(round(math.sqrt(target_area * aspect_ratio)))
+            h = int(round(math.sqrt(target_area / aspect_ratio)))
+
+            if 0 < w <= width and 0 < h <= height:
+                i = random.randint(0, height - h)
+                j = random.randint(0, width - w)
+                return i, j, h, w
+
+        # Fallback to central crop
+        in_ratio = float(width) / float(height)
+        if (in_ratio < min(ratio)):
+            w = width
+            h = int(round(w / min(ratio)))
+        elif (in_ratio > max(ratio)):
+            h = height
+            w = int(round(h * max(ratio)))
+        else:  # whole image
+            w = width
+            h = height
+        i = (height - h) // 2
+        j = (width - w) // 2
+        return i, j, h, w
+
     def __str__(self):
         """
         Transform printing format
         """
-        return f"RandomCropResize(crop_scales={self.crop_scales})"
+        return f"RandomCropResize(crop_scales={self.crop_scales}, crop_ratios={self.crop_ratios})"
 
 class ToTorchTensor:
     """
@@ -613,20 +668,23 @@ class RandomPatchSwap:
     """
     Corrupt an input image by swapping random crops within itself. (as in Chen 2019).
     """
-    def __init__(self, n=10, w=15, h=15):
+    def __init__(self, n=10, w=[10, 20], h=[10, 20], rotate=False):
         """
         Build a RandomPatchSwap transform.
         ----------
         INPUT
             |---- n (int) the number of swap to perform.
-            |---- w (int) the width of the patch to swap.
-            |---- h (int) the height of the patch to swap.
+            |---- w (int or 2-tuple) the width of the patch to swap.
+            |---- h (int or 2_tuple) the height of the patch to swap. If None, squarred patch are formed.
+            |---- roatate (bool) whether to randomly rotate the patches by 90°. H must be None to ensuresquareed patches.
         OUTPUT
             |---- a RandomPatchSwap transform.
         """
         self.n = n
         self.h = h
         self.w = w
+        self.rotate = rotate
+        assert (rotate and h is None) or (not rotate), 'With rotation enabled, h must be None.'
 
     def __call__(self, image, mask=None):
         """
@@ -642,48 +700,58 @@ class RandomPatchSwap:
         image = image.copy()
         mask = mask.copy() if mask is not None else mask
         for _ in range(self.n):
+            # get the height and width of patch
+            w = np.random.randint(low=self.w[0], high=self.w[1]) if isinstance(self.w, list) else self.w
+            if self.rotate:
+                h = w
+            else:
+                h = np.random.randint(low=self.h[0], high=self.h[1]) if isinstance(self.h, list) else self.h
             # get patches to swap
             p1, p2 = None, None
-            while self.has_overlap(p1, p2):
-                p1 = (np.random.randint(low=0, high=image.shape[0]-self.h), np.random.randint(low=0, high=image.shape[1]-self.w))
-                p2 = (np.random.randint(low=0, high=image.shape[0]-self.h), np.random.randint(low=0, high=image.shape[1]-self.w))
+            while self.has_overlap(p1, p2, h, w):
+                p1 = (np.random.randint(low=0, high=image.shape[0]-h), np.random.randint(low=0, high=image.shape[1]-w))
+                p2 = (np.random.randint(low=0, high=image.shape[0]-h), np.random.randint(low=0, high=image.shape[1]-w))
 
             # swap patches content
-            patch1 = image[p1[0]:p1[0]+self.h, p1[1]:p1[1]+self.w].copy()
-            image[p1[0]:p1[0]+self.h, p1[1]:p1[1]+self.w] = image[p2[0]:p2[0]+self.h, p2[1]:p2[1]+self.w]
-            image[p2[0]:p2[0]+self.h, p2[1]:p2[1]+self.w] = patch1
+            rot1 = np.random.randint(low=0, high=4) if self.rotate else 0
+            rot2 = np.random.randint(low=0, high=4) if self.rotate else 0
+            patch1 = image[p1[0]:p1[0]+h, p1[1]:p1[1]+w].copy()
+            image[p1[0]:p1[0]+h, p1[1]:p1[1]+w] = np.rot90(image[p2[0]:p2[0]+h, p2[1]:p2[1]+w], k=rot1, axes=(0,1))
+            image[p2[0]:p2[0]+h, p2[1]:p2[1]+w] = np.rot90(patch1, k=rot2, axes=(0,1))
 
             # crop mask as well if passed
             if mask is not None:
-                patch1 = mask[p1[0]:p1[0]+self.h, p1[1]:p1[1]+self.w].copy()
-                mask[p1[0]:p1[0]+self.h, p1[1]:p1[1]+self.w] = mask[p2[0]:p2[0]+self.h, p2[1]:p2[1]+self.w]
-                mask[p2[0]:p2[0]+self.h, p2[1]:p2[1]+self.w] = patch1
+                patch1 = mask[p1[0]:p1[0]+h, p1[1]:p1[1]+w].copy()
+                mask[p1[0]:p1[0]+h, p1[1]:p1[1]+w] = np.rot90(mask[p2[0]:p2[0]+h, p2[1]:p2[1]+w], k=rot1, axes=(0,1))
+                mask[p2[0]:p2[0]+h, p2[1]:p2[1]+w] = np.rot90(patch1, k=rot2, axes=(0,1))
 
         if mask is not None:
             return image, mask
         else:
             return image
 
-    def has_overlap(self, p1, p2):
+    def has_overlap(self, p1, p2, h, w):
         """
         Check if there's any overlap between p1 and p2.
         ----------
         INPUT
             |---- p1 (tuple) top left corner of first rectangle (row, col).
             |---- p2 (tuple) top left corner of second rectangle (row, col).
+            |---- h (int) the height of the patches
+            |---- w (int) the width of the patches
         OUTPUT
             |---- overlap (bool) True if the two rectangles overlap.
         """
         if p1 is None or p2 is None:
             return True
         else:
-            return (abs(p1[0] - p2[0]) <= self.h) and (abs(p1[1] - p2[1]) <= self.w)
+            return (abs(p1[0] - p2[0]) <= h) and (abs(p1[1] - p2[1]) <= w)
 
     def __str__(self):
         """
         Transform printing format
         """
-        return f"RandomPatchSwap(n={self.n}, w={self.w}, h={self.h})"
+        return f"RandomPatchSwap(n={self.n}, w={self.w}, h={self.h}, rotate={self.rotate})"
 
 
 

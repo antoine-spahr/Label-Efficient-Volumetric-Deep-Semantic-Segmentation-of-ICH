@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import skimage
 import skimage.io as io
+import nibabel as nib
 import time
 import logging
 import os
@@ -21,12 +22,14 @@ import json
 from datetime import timedelta
 
 from src.models.optim.LossFunctions import BinaryDiceLoss
+import src.dataset.transforms as tf
 from src.utils.tensor_utils import batch_binary_confusion_matrix
+from src.utils.ct_utils import window_ct
 from src.utils.print_utils import print_progessbar
 
 class UNet2D:
     """
-    Class defining a 2D UNet model to train and evaluate for binary segmentation as well as other utilities. The evaluation
+    Class defining a 2.5D U-Net model to train and evaluate for binary segmentation as well as other utilities. The evaluation
     mehtod compute the performances (Dice) for the 3D volume predictions.
     """
     def __init__(self, unet, n_epoch=150, batch_size=16, lr=1e-3, lr_scheduler=optim.lr_scheduler.ExponentialLR,
@@ -118,7 +121,7 @@ class UNet2D:
             epoch_loss_list = [] # Placeholder for epoch evolution
 
         # start training
-        logger.info('Start training the U-Net 2D.')
+        logger.info('Start training the U-Net 2.5D.')
         start_time = time.time()
         n_batch = len(train_loader)
 
@@ -151,7 +154,7 @@ class UNet2D:
             if valid_dataset:
                 self.evaluate(valid_dataset, print_to_logger=False, save_path=None)
                 valid_dice = f"| Valid Dice: {self.outputs['eval']['dice']['all']:.5f} " + \
-                             f"| Valid ICH Dice: {self.outputs['eval']['dice']['ICH']:.5f} "
+                             f"| Valid Dice (Positive Slices): {self.outputs['eval']['dice']['positive']:.5f} "
 
             # log the epoch statistics
             logger.info(f'\t| Epoch: {epoch + 1:03}/{self.n_epoch:03} '
@@ -159,7 +162,7 @@ class UNet2D:
                         f'| Train Loss: {epoch_loss / n_batch:.6f} ' + valid_dice +
                         f'| lr: {scheduler.get_last_lr()[0]:.7f} |')
             # Store epoch loss and epoch dice
-            epoch_loss_list.append([epoch+1, epoch_loss/n_batch, self.outputs['eval']['dice']['all'], self.outputs['eval']['dice']['ICH']])
+            epoch_loss_list.append([epoch+1, epoch_loss/n_batch, self.outputs['eval']['dice']['all'], self.outputs['eval']['dice']['positive']])
             # update scheduler
             scheduler.step()
             # Save Checkpoint every 10 epochs
@@ -183,7 +186,7 @@ class UNet2D:
         ----------
         INPUT
             |---- dataset (torch.utils.data.Dataset) the dataset to use for training. It must return an input image, a
-            |           target binary mask, the patientID and the slice number.
+            |           target binary mask, the volume ID and the slice number.
             |---- print_to_logger (bool) whether to print information to the logger.
             |---- save_path (str) the folder path where to save segemntation map (as bitmap for each slice) and the
             |           preformance dataframe. If not provided (i.e. None) nothing is saved.
@@ -201,36 +204,36 @@ class UNet2D:
 
         # Evaluation
         if print_to_logger:
-            logger.info('Start evaluating the UNet2D.')
+            logger.info('Start evaluating the U-Net 2.5D.')
         start_time = time.time()
-        id_pred = {'PatientID':[], 'Slice':[], 'ICH':[], 'TP':[], 'TN':[], 'FP':[], 'FN':[], 'pred_fn':[]} # Placeholder for each 2D prediction scores
+        id_pred = {'volID':[], 'slice':[], 'label':[], 'TP':[], 'TN':[], 'FP':[], 'FN':[], 'pred_fn':[]} # Placeholder for each 2D prediction scores
         self.unet.eval()
         with torch.no_grad():
             for b, data in enumerate(loader):
                 # get data on device
-                input, target, pID, slice_nbr = data
+                input, target, ID, slice_nbr = data
                 input = input.to(self.device).float()
                 target = target.to(self.device).float()
                 # make prediction
                 pred = self.unet(input)
                 # threshold to binarize
                 pred = torch.where(pred >= 0.5, torch.ones_like(pred, device=self.device), torch.zeros_like(pred, device=self.device))
-                # get confusion matrix for each slice of each patient
+                # get confusion matrix for each slice of each volumes
                 tn, fp, fn, tp = batch_binary_confusion_matrix(pred, target)
                 # save prediction if required
                 if save_path:
                     pred_path = []
-                    for id, s_nbr, pred_samp in zip(pID, slice_nbr, pred):
+                    for id, s_nbr, pred_samp in zip(ID, slice_nbr, pred):
                         # save slice prediction if required
                         os.makedirs(os.path.join(save_path, f'{id}/'), exist_ok=True)
                         io.imsave(os.path.join(save_path, f'{id}/{s_nbr}.bmp'), pred_samp[0,:,:].cpu().numpy().astype(np.uint8)*255, check_contrast=False) # image are binary --> put in uint8 and scale to 255
-                        pred_path.append(f'{id}/{s_nbr}.bmp') # file name with patient and slice number
+                        pred_path.append(f'{id}/{s_nbr}.bmp') # file name with volume and slice number
                 else:
-                    pred_path = ['-']*pID.shape[0]
+                    pred_path = ['-']*ID.shape[0]
                 # add data to placeholder
-                id_pred['PatientID'] += pID.cpu().tolist()
-                id_pred['Slice'] += slice_nbr.cpu().tolist()
-                id_pred['ICH'] += target.view(target.shape[0], -1).max(dim=1)[0].cpu().tolist() # 1 if mask has some ICH, else 0
+                id_pred['volID'] += ID.cpu().tolist()
+                id_pred['slice'] += slice_nbr.cpu().tolist()
+                id_pred['label'] += target.view(target.shape[0], -1).max(dim=1)[0].cpu().tolist() # 1 if mask has some positive, else 0
                 id_pred['TP'] += tp.cpu().tolist()
                 id_pred['TN'] += tn.cpu().tolist()
                 id_pred['FP'] += fp.cpu().tolist()
@@ -249,22 +252,65 @@ class UNet2D:
             result_df.to_csv(os.path.join(save_path, 'slice_prediction_scores.csv'))
 
         # aggregate by patient TP/TN/FP/FN (sum) + recompute 3D Dice & Jaccard then take mean and return values
-        result_3D_df = result_df[['PatientID', 'ICH', 'TP', 'TN', 'FP', 'FN']].groupby('PatientID').agg({'ICH':'max', 'TP':'sum', 'TN':'sum', 'FP':'sum', 'FN':'sum'})
+        result_3D_df = result_df[['volID', 'label', 'TP', 'TN', 'FP', 'FN']].groupby('volID').agg({'label':'max', 'TP':'sum', 'TN':'sum', 'FP':'sum', 'FN':'sum'})
         result_3D_df['Dice'] = (2*result_3D_df.TP + 1) / (2*result_3D_df.TP + result_3D_df.FP + result_3D_df.FN + 1)
         if save_path:
             result_3D_df.to_csv(os.path.join(save_path, 'volume_prediction_scores.csv'))
 
-        # take average over ICH-positive patient only and all together
-        avg_results_ICH = result_3D_df.loc[result_3D_df.ICH == 1, 'Dice'].mean(axis=0)
+        # take average over positive volumes only and all together
+        avg_results_ICH = result_3D_df.loc[result_3D_df.label == 1, 'Dice'].mean(axis=0)
         avg_results = result_3D_df.Dice.mean(axis=0)
         self.outputs['eval']['time'] = time.time() - start_time
-        self.outputs['eval']['dice'] = {'all':avg_results, 'ICH':avg_results_ICH}
+        self.outputs['eval']['dice'] = {'all':avg_results, 'positive':avg_results_ICH}
 
         if print_to_logger:
             logger.info(f"Evaluation time: {timedelta(seconds=int(self.outputs['eval']['time']))}")
             logger.info(f"Evaluation Dice: {self.outputs['eval']['dice']['all']:.5f}.")
-            logger.info(f"Evaluation Dice (ICH only): {self.outputs['eval']['dice']['ICH']:.5f}.")
-            logger.info("Finished evaluating the U-Net 2D.")
+            logger.info(f"Evaluation Dice (Positive only): {self.outputs['eval']['dice']['positive']:.5f}.")
+            logger.info("Finished evaluating the U-Net 2.5D.")
+
+    def segement_volume(self, vol, save_fn=None, window=None, input_size=(256, 256), return_pred=False):
+        """
+        Segement each slice of the passed Nifti volumes and save the results as a Nifti volumes.
+        ----------
+        INPUT
+            |---- vol (nibabel.nifti1.Nifti1Pair) the nibabel volumes with metadata to segement.
+            |---- save_fn (str) where to save the segmentation.
+            |---- window (tuple (center, width)) the winowing to apply to the ct-scan.
+            |---- input_size (tuple (h, w)) the input size for the network.
+            |---- return_pred (bool) whether to return the volume of prediction.
+        OUTPUT
+            |---- (mask_vol) (nibabel.nifti1.Nifti1Pair) the prediction volume.
+        """
+        pred_list = []
+        vol_data = np.rot90(vol.get_fdata(), axes=(0,1)) # 90° counterclockwise rotation
+        if window:
+            vol_data = window_ct(vol_data, win_center=window[0], win_width=window[1], out_range=(0,1))
+        transform = tf.Compose(tf.Resize(H=input_size[0], W=input_size[1]), tf.ToTorchTensor())
+        self.unet.eval()
+        with torch.no_grad():
+            for s in range(0, vol_data.shape[2], self.batch_size):
+                # get slice in good size and as tensor
+                input = transform(vol_data[:,:,s:s+self.batch_size]).to(self.device).float().permute(3,0,1,2)
+                # predict
+                pred = self.unet(input)
+                pred = torch.where(pred >= 0.5, torch.ones_like(pred, device=self.device), torch.zeros_like(pred, device=self.device))
+                # store pred (B x H x W)
+                pred_list.append(pred.squeeze(dim=1).permute(1,2,0).cpu().numpy().astype(np.uint8)*255)
+                if self.print_progress:
+                    print_progessbar(s+pred.shape[0]-1, Max=vol_data.shape[2], Name='Slice', Size=20, erase=True)
+
+        # make the prediction volume
+        vol_pred = np.concatenate(pred_list, axis=2)
+        # resize to input size and rotate 90° clockwise
+        vol_pred = np.rot90(skimage.transform.resize(vol_pred, (vol.header['dim'][1], vol.header['dim'][2]), order=0), axes=(1,0))
+        # make Nifty and save it
+        vol_pred_nii = nib.Nifti1Pair(vol_pred.astype(np.uint8), vol.affine)
+        if save_fn:
+            nib.save(vol_pred_nii, save_fn)
+        # return Nifti prediction
+        if return_pred:
+            return vol_pred_nii
 
     def transfer_weights(self, init_state_dict, verbose=False):
         """

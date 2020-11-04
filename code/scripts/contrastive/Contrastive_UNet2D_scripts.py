@@ -6,7 +6,7 @@ date : 21.10.2020
 ----------
 
 TO DO :
-- add some non-ICH samples to eval dataset
+- debug
 """
 import sys
 sys.path.append('../../')
@@ -19,16 +19,15 @@ import torch
 import torch.cuda
 import numpy as np
 import pandas as pd
-from datetime import datetime
 from prettytable import PrettyTable
 
 from sklearn.model_selection import StratifiedKFold
 
-from src.utils.Config import Config
-from src.models.optim.ContextRestoration import ContextRestoration
+#from src.utils.Config import Config
+from src.models.optim.Contrastive import Contrastive
 from src.models.optim.UNet2D import UNet2D
-#from src.models.optim.LossFunctions import BinaryDiceLoss
-from src.models.networks.UNet import UNet
+#from src.models.optim.LossFunctions import BinaryDiceLoss, InfoNCELoss
+from src.models.networks.UNet import UNet, UNet_Encoder, Partial_UNet
 import src.models.optim.LossFunctions
 from src.dataset.datasets import public_SegICH_Dataset2D, RSNA_dataset
 import src.dataset.transforms as tf
@@ -38,15 +37,15 @@ from src.postprocessing.analyse_exp import analyse_supervised_exp, analyse_repre
 @click.argument('config_path', type=click.Path(exists=True))
 def main(config_path):
     """
-    UNet2D pretrained on context retoration with the RSNA dataset and finetuned with the public data.
+    UNet2D pretrained on the global and/or local contrastive task with the RSNA dataset and finetuned with the public data.
     """
     # load the config file
     with open(config_path, 'r') as fp:
         cfg = json.load(fp)
 
     # Make Outputs directories
-    out_path = os.path.join(cfg['path']['output'], cfg['exp_name'])# + datetime.now().strftime('_%Y-%m-%d'))
-    out_path_selfsup = os.path.join(out_path, 'context_restoration_pretrain/')
+    out_path = os.path.join(cfg['path']['output'], cfg['exp_name'])
+    out_path_selfsup = os.path.join(out_path, 'contrastive_pretrain/')
     out_path_sup = os.path.join(out_path, 'supervised_train/')
     os.makedirs(out_path_selfsup, exist_ok=True)
     for k in range(cfg['Sup']['split']['n_fold']):
@@ -64,8 +63,7 @@ def main(config_path):
 
     # Set number of thread
     if cfg['n_thread'] > 0: torch.set_num_threads(cfg['n_thread'])
-    # check if GPU available
-    #cfg['device'] = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    # check if GPU available and select the bigger one
     if cfg['device'] is not None:
         cfg['device'] = torch.device(cfg['device'])
     else:
@@ -80,9 +78,9 @@ def main(config_path):
         else:
             cfg['device'] = torch.device('cpu')
 
-    ###################################################
-    # Self-supervised training on Context Restoration #
-    ###################################################
+    ####################################################
+    # Self-supervised training on the Contrastive Task #
+    ####################################################
     # Initialize Logger
     logger = initialize_logger(os.path.join(out_path_selfsup, 'log.txt'))
     if os.path.exists(os.path.join(out_path_selfsup, f'checkpoint.pt')):
@@ -108,12 +106,13 @@ def main(config_path):
     test_df, train_df = test_df.reset_index(), train_df.reset_index()
     logger.info('\n' + str(get_split_summary_table(df_rsna, train_df, test_df)))
 
-    # Make dataset : Train --> ContextRestoration, Test --> Standard
+    #################### Self-supervised training on the GLOBAL Contrastive Task ####################
+    logger.info('Phase 1 : GLOBAL contrastive training.')
+    # Make dataset
     train_RSNA_dataset = RSNA_dataset(train_df, cfg['path']['data']['SSL'],
                                  augmentation_transform=[getattr(tf, tf_name)(**tf_kwargs) for tf_name, tf_kwargs in cfg['SSL']['dataset']['augmentation']['train'].items()],
-                                 window=(cfg['data']['win_center'], cfg['data']['win_width']), output_size=cfg['data']['size'],
-                                 mode='context_restoration', n_swap=cfg['SSL']['dataset']['n_swap'], swap_w=cfg['SSL']['dataset']['swap_w'],
-                                 swap_h=cfg['SSL']['dataset']['swap_h'], swap_rot=cfg['SSL']['dataset']['swap_rotate'])
+                                 window=(cfg['data']['win_center'], cfg['data']['win_width']), output_size=cfg['data']['size'], mode='contrastive',
+                                 contrastive_augmentation=[getattr(tf, tf_name)(**tf_kwargs) for tf_name, tf_kwargs in cfg['SSL']['dataset']['contrastive_augmentation']['global'].items()])
     test_RSNA_dataset = RSNA_dataset(test_df, cfg['path']['data']['SSL'],
                                  augmentation_transform=[getattr(tf, tf_name)(**tf_kwargs) for tf_name, tf_kwargs in cfg['SSL']['dataset']['augmentation']['eval'].items()],
                                  window=(cfg['data']['win_center'], cfg['data']['win_width']), output_size=cfg['data']['size'],
@@ -121,62 +120,123 @@ def main(config_path):
     logger.info(f"Data will be loaded from {cfg['path']['data']['SSL']}.")
     logger.info(f"CT scans will be windowed on [{cfg['data']['win_center']-cfg['data']['win_width']/2} ; {cfg['data']['win_center'] + cfg['data']['win_width']/2}]")
     logger.info(f"CT scans will be resized to {cfg['data']['size']}x{cfg['data']['size']}")
-    logger.info(f"Training online data transformation: \n\n {str(train_RSNA_dataset.transform)}\n")
+    logger.info(f"Training online data transformation: \n\n {str(train_RSNA_dataset.transform + train_RSNA_dataset.contrastive_transform)}\n")
     logger.info(f"Evaluation online data transformation: \n\n {str(test_RSNA_dataset.transform)}\n")
-    logger.info(f"Input images will be corrupted by {cfg['SSL']['dataset']['n_swap']} swap of dimension {cfg['SSL']['dataset']['swap_h']}x{cfg['SSL']['dataset']['swap_w']} (h x w)")
 
-    # Make U-Net architecture
-    net_ssl = UNet(depth=cfg['SSL']['net']['depth'], top_filter=cfg['SSL']['net']['top_filter'],
-                     use_3D=cfg['SSL']['net']['3D'], in_channels=cfg['SSL']['net']['in_channels'],
-                     out_channels=cfg['SSL']['net']['out_channels'], bilinear=cfg['SSL']['net']['bilinear'],
-                     use_final_activation=cfg['SSL']['net']['final_activation'])
-    net_ssl.to(cfg['device'])
-    logger.info(f"U-Net2D initialized with a depth of {cfg['SSL']['net']['depth']}"
-                f" and a number of initial filter of {cfg['SSL']['net']['top_filter']},")
-    logger.info(f"Reconstruction performed with {'Upsample + Conv' if cfg['SSL']['net']['bilinear'] else 'ConvTranspose'}.")
-    logger.info(f"U-Net2D takes {cfg['SSL']['net']['in_channels']} as input channels and {cfg['SSL']['net']['out_channels']} as output channels.")
-    logger.info(f"The U-Net2D has {sum(p.numel() for p in net_ssl.parameters())} parameters.")
+    # Make Encoder architecture
+    net_global = UNet_Encoder(depth=cfg['SSL']['global']['net']['depth'], top_filter=cfg['SSL']['global']['net']['top_filter'],
+                              use_3D=cfg['SSL']['global']['net']['3D'], in_channels=cfg['SSL']['global']['net']['in_channels'],
+                              MLP_head=cfg['SSL']['global']['net']['MLP_head'])
+    net_global.to(cfg['device'])
+    logger.info(f"U-Net2D Encoder initialized with a depth of {cfg['SSL']['global']['net']['depth']}"
+                f" and a number of initial filter of {cfg['SSL']['global']['net']['top_filter']},")
+    logger.info(f"Compression is performed with a MLP head : {cfg['SSL']['global']['net']['MLP_head']}.")
+    logger.info(f"U-Net2D Encoder takes {cfg['SSL']['global']['net']['in_channels']} channels as input.")
+    logger.info(f"The U-Net2D Encoder has {sum(p.numel() for p in net_global.parameters())} parameters.")
 
-    # Make Model
-    ctx_restor = ContextRestoration(net_ssl, n_epoch=cfg['SSL']['train']['n_epoch'], batch_size=cfg['SSL']['train']['batch_size'],
-                                    lr=cfg['SSL']['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg['SSL']['train']['lr_scheduler']),
-                                    lr_scheduler_kwargs=cfg['SSL']['train']['lr_scheduler_kwargs'],
-                                    loss_fn=getattr(torch.nn, cfg['SSL']['train']['loss_fn']), loss_fn_kwargs=cfg['SSL']['train']['loss_fn_kwargs'],
-                                    weight_decay=cfg['SSL']['train']['weight_decay'], num_workers=cfg['SSL']['train']['num_workers'],
-                                    device=cfg['device'], print_progress=cfg['print_progress'])
+    # Make model
+    cfg['SSL']['global']['train']['loss_fn_kwargs'].update({"set_size":cfg['SSL']['global']['train']['batch_size'], "device": str(cfg['device'])})
+    ctrst_global = Contrastive(net_global, n_epoch=cfg['SSL']['global']['train']['n_epoch'], batch_size=cfg['SSL']['global']['train']['batch_size'],
+                               lr=cfg['SSL']['global']['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg['SSL']['global']['train']['lr_scheduler']),
+                               lr_scheduler_kwargs=cfg['SSL']['global']['train']['lr_scheduler_kwargs'],
+                               loss_fn=getattr(src.models.optim.LossFunctions, cfg['SSL']['global']['train']['loss_fn']),
+                               loss_fn_kwargs=cfg['SSL']['global']['train']['loss_fn_kwargs'],
+                               weight_decay=cfg['SSL']['global']['train']['weight_decay'], num_workers=cfg['SSL']['global']['train']['num_workers'],
+                               device=cfg['device'], print_progress=cfg['print_progress'], is_global=True)
 
     # Load weights if specified
-    if cfg['SSL']['train']['model_path_to_load']:
-        model_path = cfg['SSL']['train']['model_path_to_load']
-        ctx_restor.load_model(model_path, map_location=cfg['device'])
+    if cfg['SSL']['global']['train']['model_path_to_load']:
+        model_path = cfg['SSL']['global']['train']['model_path_to_load']
+        ctrst_global.load_model(model_path, map_location=cfg['device'])
 
-    # train if needed
-    if cfg['SSL']['train']['n_epoch'] > 0:
+    # Train if required
+    if cfg['SSL']['global']['train']['n_epoch'] > 0:
         train_params = []
-        for key, value in cfg['SSL']['train'].items():
+        for key, value in cfg['SSL']['global']['train'].items():
             train_params.append(f"--> {key} : {value}")
-        logger.info('Training settings:\n\t' + '\n\t'.join(train_params))
+        logger.info('Global Training settings:\n\t' + '\n\t'.join(train_params))
 
-        ctx_restor.train(train_RSNA_dataset, checkpoint_path=os.path.join(out_path_selfsup, f'checkpoint.pt'))
+        ctrst_global.train(train_RSNA_dataset, checkpoint_path=os.path.join(out_path_selfsup, f'checkpoint_global.pt'))
 
-    # evaluate
-    ctx_restor.evaluate(test_RSNA_dataset)
+    # Evaluate
+    ctrst_global.evaluate(test_RSNA_dataset)
 
-    # save model, outputs and evaluation data info (test_df)
-    ctx_restor.save_model(os.path.join(out_path_selfsup, 'pretrained_unet.pt'))
-    logger.info("Pre-trained U-Net on context restoration saved at " + os.path.join(out_path_selfsup, 'pretrained_unet.pt'))
-    ctx_restor.save_outputs(os.path.join(out_path_selfsup, 'outputs.json'))
-    logger.info("Context restoration outputs saved at " + os.path.join(out_path_selfsup, 'outputs.json'))
+    # save model
+    ctrst_global.save_model(os.path.join(out_path_selfsup, 'pretrained_global.pt'))
+    logger.info("U-Net Encoder pretrained on global contrastive task saved at " + os.path.join(out_path_selfsup, 'pretrained_global.pt'))
+    ctrst_global.save_outputs(os.path.join(out_path_selfsup, 'outputs.json'))
+    logger.info("Global Contrastive outputs saved at " + os.path.join(out_path_selfsup, 'outputs.json'))
     test_df.to_csv(os.path.join(out_path_selfsup, 'eval_data_info.csv'))
     logger.info("Evaluation data info saved at " + os.path.join(out_path_selfsup, 'eval_data_info.csv'))
 
-    # delete any checkpoints
-    if os.path.exists(os.path.join(out_path_selfsup, f'checkpoint.pt')):
-        os.remove(os.path.join(out_path_selfsup, f'checkpoint.pt'))
-        logger.info('Checkpoint deleted.')
+    # get weights
+    global_weights = ctrst_global.get_state_dict()
 
-    # get weights state dictionnary
-    pretrained_unet_weights = ctx_restor.get_state_dict()
+    #################### Self-supervised training on the LOCAL Contrastive Task ####################
+    # train on local contrastive if required. Otherwise to directly fine tuning of supervised.
+    if not cfg['SSL']['local']['skip']:
+        logger.info('Phase 2 : LOCAL contrastive training.')
+        # Make dataset
+        train_RSNA_dataset = RSNA_dataset(train_df, cfg['path']['data']['SSL'],
+                                     augmentation_transform=[getattr(tf, tf_name)(**tf_kwargs) for tf_name, tf_kwargs in cfg['SSL']['dataset']['augmentation']['train'].items()],
+                                     window=(cfg['data']['win_center'], cfg['data']['win_width']), output_size=cfg['data']['size'], mode='contrastive',
+                                     contrastive_augmentation=[getattr(tf, tf_name)(**tf_kwargs) for tf_name, tf_kwargs in cfg['SSL']['dataset']['contrastive_augmentation']['local'].items()])
+        logger.info(f"Data will be loaded from {cfg['path']['data']['SSL']}.")
+        logger.info(f"CT scans will be windowed on [{cfg['data']['win_center']-cfg['data']['win_width']/2} ; {cfg['data']['win_center'] + cfg['data']['win_width']/2}]")
+        logger.info(f"CT scans will be resized to {cfg['data']['size']}x{cfg['data']['size']}")
+        logger.info(f"Training online data transformation: \n\n {str(train_RSNA_dataset.transform + train_RSNA_dataset.contrastive_transform)}\n")
+
+        # Make Partial Unet architecture
+        net_local = Partial_UNet(depth=cfg['SSL']['local']['net']['depth'], n_decoder=cfg['SSL']['local']['net']['n_decoder'],
+                                 top_filter=cfg['SSL']['local']['net']['top_filter'], use_3D=cfg['SSL']['local']['net']['3D'],
+                                 in_channels=cfg['SSL']['local']['net']['in_channels'], head_channel=cfg['SSL']['local']['net']['head_channel'],
+                                 bilinear=cfg['SSL']['local']['net']['bilinear'])
+        net_local.to(cfg['device'])
+        logger.info(f"Partial U-Net2D initialized with a depth of {cfg['SSL']['local']['net']['depth']}"
+                    f" and a number of initial filter of {cfg['SSL']['local']['net']['top_filter']},")
+        logger.info(f"{cfg['SSL']['local']['net']['n_decoder']} decoder layer with a convolutionnal head: {cfg['SSL']['local']['net']['head_channel']}, are used to generate the feature map.")
+        logger.info(f"Partial U-Net2D takes {cfg['SSL']['global']['net']['in_channels']}.")
+        logger.info(f"The Partial U-Net2D has {sum(p.numel() for p in net_local.parameters())} parameters.")
+
+        # Make model
+        cfg['SSL']['local']['loss_fn_kwargs'].update({"device": str(cfg['device'])})
+        ctrst_local = Contrastive(net_local, n_epoch=cfg['SSL']['local']['train']['n_epoch'], batch_size=cfg['SSL']['local']['train']['batch_size'],
+                                  lr=cfg['SSL']['local']['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg['SSL']['local']['train']['lr_scheduler']),
+                                  lr_scheduler_kwargs=cfg['SSL']['local']['train']['lr_scheduler_kwargs'],
+                                  loss_fn=getattr(src.models.optim.LossFunctions, cfg['SSL']['local']['train']['loss_fn']),
+                                  loss_fn_kwargs=cfg['SSL']['local']['loss_fn_kwargs'],
+                                  weight_decay=cfg['SSL']['train']['local']['weight_decay'], num_workers=cfg['SSL']['local']['train']['num_workers'],
+                                  device=cfg['device'], print_progress=cfg['print_progress'], is_global=False)
+
+        # transfer and freeze Global weights
+        logger.info(f"Initialize Partial U-Net2D with the {'freezed' if cfg['SSL']['train']['local']['freeze'] else ''} weights learned with global contrastive on RSNA.")
+        ctrst_local.transfer_weights(global_weights, verbose=True, freeze=cfg['SSL']['train']['local']['freeze'])
+        logger.info(f"Succesfully tranferred the weights. The partial U-Net2D has now {sum(p.numel() for p in net_local.parameters() if p.requires_grad)} trainable parameters.")
+
+        # Load a model if given
+        if cfg['SSL']['local']['train']['model_path_to_load']:
+            model_path = cfg['SSL']['local']['train']['model_path_to_load']
+            ctrst_local.load_model(model_path, map_location=cfg['device'])
+
+        # Train if required
+        if cfg['SSL']['local']['train']['n_epoch'] > 0:
+            train_params = []
+            for key, value in cfg['SSL']['local']['train'].items():
+                train_params.append(f"--> {key} : {value}")
+            logger.info('Local Training settings:\n\t' + '\n\t'.join(train_params))
+
+            ctrst_local.train(train_RSNA_dataset, checkpoint_path=os.path.join(out_path_selfsup, f'checkpoint_local.pt'))
+
+        # save model
+        ctrst_global.save_model(os.path.join(out_path_selfsup, 'pretrained_local.pt'))
+        logger.info("Partial U-Net pretrained on local contrastive task saved at " + os.path.join(out_path_selfsup, 'pretrained_local.pt'))
+        ctrst_global.save_outputs(os.path.join(out_path_selfsup, 'outputs_local.json'))
+        logger.info("Local Contrastive outputs saved at " + os.path.join(out_path_selfsup, 'outputs_local.json'))
+
+        # get weights
+        to_transfer_weights = ctrst_local.get_state_dict()
+    else:
+        to_transfer_weights = global_weights
 
     ###################################################################
     # Supervised fine-training of U-Net  with K-Fold Cross-Validation #
@@ -242,11 +302,9 @@ def main(config_path):
                             loss_fn_kwargs=cfg['Sup']['train']['loss_fn_kwargs'], weight_decay=cfg['Sup']['train']['weight_decay'],
                             num_workers=cfg['Sup']['train']['num_workers'], device=cfg['device'], print_progress=cfg['print_progress'])
 
-            # ????? load model if specified ?????
-
             # transfer weights learn with context restoration
             logger.info('Initialize U-Net2D with weights learned with context_restoration on RSNA.')
-            unet2D.transfer_weights(pretrained_unet_weights, verbose=True)
+            unet2D.transfer_weights(to_transfer_weights, verbose=True)
 
             # Print training parameters
             train_params = []
@@ -334,7 +392,7 @@ def save_mean_fold_dice(out_path, n_fold):
     for k in range(n_fold):
         with open(os.path.join(out_path, f'Fold_{k+1}/outputs.json'), 'r') as f:
             out = json.load(f)
-        scores_list.append([out['eval']['dice']['all'], out['eval']['dice']['ICH']])
+        scores_list.append([out['eval']['dice']['all'], out['eval']['dice']['positive']])
     # take mean and std
     means = np.array(scores_list).mean(axis=0)
     CI95 = 1.96*np.array(scores_list).std(axis=0)
@@ -343,5 +401,5 @@ def save_mean_fold_dice(out_path, n_fold):
         f.write(f'Dice = {means[0]} +/- {CI95[0]}\n')
         f.write(f'Dice (ICH) = {means[1]} +/- {CI95[1]}\n')
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

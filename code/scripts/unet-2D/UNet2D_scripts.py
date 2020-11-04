@@ -98,7 +98,20 @@ def main(config_path):
                 torch.set_num_threads(cfg.settings['n_thread'])
             logger.info(f"Number of thread : {cfg.settings['n_thread']}")
             # check if GPU available
-            cfg.settings['device'] = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+            #cfg.settings['device'] = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+            if cfg.settings['device'] is not None:
+                cfg.settings['device'] = torch.device(cfg.settings['device'])
+            else:
+                if torch.cuda.is_available():
+                    free_mem, device_idx = 0.0, 0
+                    for d in range(torch.cuda.device_count()):
+                        mem = torch.cuda.get_device_properties(d).total_memory - torch.cuda.memory_allocated(d)
+                        if mem > free_mem:
+                            device_idx = d
+                            free_mem = mem
+                    cfg.settings['device'] = torch.device(f'cuda:{device_idx}')
+                else:
+                    cfg.settings['device'] = torch.device('cpu')
             logger.info(f"Device : {cfg.settings['device']}")
 
             # extract train and test DataFrames + print summary (n samples positive and negatives)
@@ -185,12 +198,12 @@ def main(config_path):
     for k in range(cfg.settings['split']['n_fold']):
         with open(os.path.join(out_path, f'Fold_{k+1}/outputs.json'), 'r') as f:
             out = json.load(f)
-        scores_list.append([out['eval']['dice']['all'], out['eval']['dice']['ICH']])
+        scores_list.append([out['eval']['dice']['all'], out['eval']['dice']['positive']])
     means = np.array(scores_list).mean(axis=0)
     CI95 = 1.96*np.array(scores_list).std(axis=0)
     with open(os.path.join(out_path, 'average_scores.txt'), 'w') as f:
         f.write(f'Dice = {means[0]} +/- {CI95[0]}\n')
-        f.write(f'Dice (ICH) = {means[1]} +/- {CI95[1]}\n')
+        f.write(f'Dice (Positive) = {means[1]} +/- {CI95[1]}\n')
     logger.info('Average Scores saved at ' + os.path.join(out_path, 'average_scores.txt'))
 
     # generate dataframe of all prediction
@@ -205,7 +218,7 @@ def main(config_path):
     logger.info("Config file saved at " + os.path.join(out_path, 'config.json'))
 
     # Analyse results
-    analyse_supervised_exp(out_path, cfg.settings['path']['DATA'], cfg.settings['split']['n_fold'], os.path.join(out_path, 'results_overview.pdf'))
+    analyse_supervised_exp(out_path, cfg.settings['path']['DATA'], cfg.settings['split']['n_fold'], save_fn=os.path.join(out_path, 'results_overview.pdf'))
     logger.info('Results overview figure saved at ' + os.path.join(out_path, 'results_overview.pdf'))
 
 def get_split_summary_table(all_df, train_df, test_df):
