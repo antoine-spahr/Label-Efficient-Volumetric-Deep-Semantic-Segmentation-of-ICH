@@ -241,9 +241,9 @@ class LocalInfoNCELoss(nn.Module):
         idx_col = np.random.choice((H//self.K) * (W//self.K), self.n_region, replace=False)
         idx = np.random.rand(bs, (H//self.K) * (W//self.K)).argsort(axis=1)[:,idx_col]
         # define label of each region
-        val = torch.arange(1, self.n_region + 1).repeat(bs, 1)
+        val = torch.arange(1, self.n_region + 1, device=self.device).repeat(bs, 1)
         mask = torch.zeros(bs, (H//self.K) * (W//self.K), device=self.device)
-        mask[np.repeat(np.arange(0, bs), self.n_region), idx.ravel()] = val.view(-1).float()
+        mask[torch.tensor(np.repeat(np.arange(0, bs), self.n_region), device=self.device), torch.tensor(idx.ravel(), device=self.device)] = val.view(-1).float()
         # reshape
         mask = mask.view(bs, (H//self.K), (W//self.K))
         # upsample to get KxK region
@@ -253,6 +253,8 @@ class LocalInfoNCELoss(nn.Module):
         out[:,:mask.shape[1],:mask.shape[2]] = mask
 
         return out
+
+#torch.arange(0, bs).unsqueeze(1).repeat(1,15).view(-1)
 
     def forward(self, f1, f2):
         """
@@ -268,10 +270,11 @@ class LocalInfoNCELoss(nn.Module):
         # get a mask of region to extract for each sample of batch : region mask -> B x H x W
         region_mask = self.get_sample_region_mask(f1.shape)
         # get indices of region positions for feature map indexation
-        indices = torch.cat([np.argwhere(region_mask==i) for i in range(1, self.n_region + 1)], dim=1)
+        #indices = torch.cat([np.argwhere(region_mask==i) for i in range(1, self.n_region + 1)], dim=1)
+        indices = torch.cat([torch.nonzero(region_mask==i) for i in range(1, self.n_region + 1)], dim=0)
         # extract region of feature map. fir : B x A x K*K*C
-        f1r = f1[indices[0], indices[1], indices[2], :].view(self.n_region, bs, -1).permute(1,0,2)
-        f2r = f2[indices[0], indices[1], indices[2], :].view(self.n_region, bs, -1).permute(1,0,2)
+        f1r = f1[indices[:,0], indices[:,1], indices[:,2], :].view(self.n_region, bs, -1).permute(1,0,2)
+        f2r = f2[indices[:,0], indices[:,1], indices[:,2], :].view(self.n_region, bs, -1).permute(1,0,2)
         # concat features map --> B x 2A x K*K*C
         p = torch.cat((f1r, f2r), dim=1)
         # compute cosine Similarity between KKC features --> sim : B x 2A x 2A

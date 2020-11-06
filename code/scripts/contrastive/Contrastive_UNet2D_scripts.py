@@ -148,6 +148,7 @@ def main(config_path):
     if cfg['SSL']['global']['train']['model_path_to_load']:
         model_path = cfg['SSL']['global']['train']['model_path_to_load']
         ctrst_global.load_model(model_path, map_location=cfg['device'])
+        logger.info(f"Model's weights loaded succesfully from {model_path}")
 
     # Train if required
     if cfg['SSL']['global']['train']['n_epoch'] > 0:
@@ -199,18 +200,18 @@ def main(config_path):
         logger.info(f"The Partial U-Net2D has {sum(p.numel() for p in net_local.parameters())} parameters.")
 
         # Make model
-        cfg['SSL']['local']['loss_fn_kwargs'].update({"device": str(cfg['device'])})
+        cfg['SSL']['local']['train']['loss_fn_kwargs'].update({"device": str(cfg['device'])})
         ctrst_local = Contrastive(net_local, n_epoch=cfg['SSL']['local']['train']['n_epoch'], batch_size=cfg['SSL']['local']['train']['batch_size'],
                                   lr=cfg['SSL']['local']['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg['SSL']['local']['train']['lr_scheduler']),
                                   lr_scheduler_kwargs=cfg['SSL']['local']['train']['lr_scheduler_kwargs'],
                                   loss_fn=getattr(src.models.optim.LossFunctions, cfg['SSL']['local']['train']['loss_fn']),
-                                  loss_fn_kwargs=cfg['SSL']['local']['loss_fn_kwargs'],
-                                  weight_decay=cfg['SSL']['train']['local']['weight_decay'], num_workers=cfg['SSL']['local']['train']['num_workers'],
+                                  loss_fn_kwargs=cfg['SSL']['local']['train']['loss_fn_kwargs'],
+                                  weight_decay=cfg['SSL']['local']['train']['weight_decay'], num_workers=cfg['SSL']['local']['train']['num_workers'],
                                   device=cfg['device'], print_progress=cfg['print_progress'], is_global=False)
 
         # transfer and freeze Global weights
-        logger.info(f"Initialize Partial U-Net2D with the {'freezed' if cfg['SSL']['train']['local']['freeze'] else ''} weights learned with global contrastive on RSNA.")
-        ctrst_local.transfer_weights(global_weights, verbose=True, freeze=cfg['SSL']['train']['local']['freeze'])
+        logger.info(f"Initialize Partial U-Net2D with the {'freezed' if cfg['SSL']['local']['train']['freeze'] else ''} weights learned with global contrastive on RSNA.")
+        ctrst_local.transfer_weights(global_weights, verbose=True, freeze=cfg['SSL']['local']['train']['freeze'])
         logger.info(f"Succesfully tranferred the weights. The partial U-Net2D has now {sum(p.numel() for p in net_local.parameters() if p.requires_grad)} trainable parameters.")
 
         # Load a model if given
