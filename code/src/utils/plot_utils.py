@@ -8,7 +8,6 @@ date : 28.09.2020
 TO DO :
 
 """
-
 import matplotlib.pyplot as plt
 import matplotlib
 import pyvista as pv
@@ -341,7 +340,23 @@ def add_stat_significance(pairs, data, serie_names, group_names, w=None, mode='a
 def imshow_pred(im, pred, target=None, ax=None, im_cmap=None, pred_color='tomato', target_color='forestgreen',
                 pred_alpha=0.8, target_alpha=0.8, imshow_kwargs=dict(aspect='equal'), legend=True, legend_kwargs=None):
     """
-
+    Enables to plot a image (as plt.imshow) with a prediction and/or a ground truth mask over it.
+    ----------
+    INPUT
+        |---- im (np.array) the image to display (is input to plt.imshow()).
+        |---- pred (boolean np.array) prediction mask.
+        |---- target (boolean np.array) the ground truth mask
+        |---- ax (plt.Axes) axes on which to plot.
+        |---- im_cmap (string) a valid matplotlib colormap to color im.
+        |---- pred_color (str) color to be used for the prediction mask.
+        |---- target_color (str) color to be used for the ground truth mask.
+        |---- pred_alpha (float) color opacity to be used for the prediction mask.
+        |---- target_alpha (float) color opacity to be used for the ground truth mask.
+        |---- imshow_kwargs (dict) keyword argument to be passed to imshow. Mostly relevant for controling the ascpect ratio.
+        |---- legend (bool) whether to add a legend.
+        |---- legend_kwargs (dict) keywords arguments for the legend.
+    OUTPUT
+        |---- None
     """
     if pred.dtype != 'bool':
         pred = pred.astype('bool')
@@ -354,6 +369,7 @@ def imshow_pred(im, pred, target=None, ax=None, im_cmap=None, pred_color='tomato
     ax = plt.gca() if ax is None else ax
     ax.set_axis_off()
     # plot image
+    im_cmap = 'gray' if im_cmap is None else im_cmap
     ax.imshow(im, cmap=im_cmap, **imshow_kwargs)
     # show target
     if target is not None:
@@ -404,3 +420,113 @@ def plot_tsne(embed, color_code, colors=None, ax=None, scatter_kwargs=dict(s=10,
 
     if legend:
         ax.legend(handles, labels, **legend_kwargs)
+
+def boxplot_hist(data, ax=None, box_w=0.1, box_x=0.5, boxplot_kwargs=None, box_fc='lightgray', half_box=False, hist_width=0.2,
+                 hist_gap=0.1, shared_hist_axis=False, hist_kwargs=None, hist_ax_label='Count [-]', scatter_data=False,
+                 scatter_width=None, scatter_kwargs=None):
+    """
+    Plot a combinatation of boxplot and histogram (vertically).
+    ----------
+    INPUT
+        |---- data (list of 1D array-like) the data to display as a histogram + boxplot. Each array of list is one series
+        |               that will be displayed as one box-hist.
+        |---- ax (plt.Axes) axes where to plot the boxhist.
+        |---- box_w (float or 1D-array) the boxplot width of the box. If float, the widths is the same for all box.
+        |---- box_x (float or 1D-array) the x-position of the boxplot. If float, the x positions are equally spaced and
+        |               the value passed represent the spacing.
+        |---- boxplot_kwargs (dict) keyword arguments to be passed to the matplotlib boxplot.
+        |---- box_fc (str) boxplot facecolor. Set to None for no facecolor.
+        |---- half_box (bool) whether to display the boxplot as only a half-box (with box_w) and sticking the histogram
+        |               to the side of the half-box.
+        |---- hist_width (float) the space allocated for the histogram on the plot in term of data x-value.
+        |---- hist_gap (float) the gap between the boxplot side and the histogram in term of data x-value. Ignored if
+        |               half-box is true.
+        |---- shared_hist_axis (bool) whether the histograms of the different box_hist should be similar.
+        |---- hist_kwargs (dict) keyword arguments for the matplotlib hist method.
+        |---- hist_ax_label (str or list of str) the ax label for the hist. If single string, the same is used for each
+        |           distribution. If list, it must have the same number of entry as in data.
+        |---- scatter_data (float) whether to display the data as a scatter plot on top of the boxplot.
+        |---- scatter_width (float) the x-scatter amplitude. Data points will be scatter horizontally from a normal
+        |               distribution with a std of scatter_width. If None, scatter_width = 0.1*box_w
+        |---- scatter_kwargs (dict) the keyword arguments to be passed to matplotlib scatter.
+    OUTPUT
+        |---- None
+    """
+    # control inputs and define default behaviour
+    ax = plt.gca() if ax is None else ax
+    box_x = np.arange(0, len(data)*box_x, box_x)[:len(data)] if isinstance(box_x, float) else box_x
+    box_w = np.repeat(box_w, len(data)) if isinstance(box_w, float) else box_w
+    if boxplot_kwargs is None:
+        boxplot_kwargs = dict(capprops=dict(lw=2, color='black'),
+                              boxprops=dict(lw=2, color='black'),
+                              whiskerprops=dict(lw=2, color='black'),
+                              flierprops=dict(marker='x', markeredgewidth=1, markerfacecolor='gray', markersize=5),
+                              medianprops=dict(lw=2, color='xkcd:vermillion'),
+                              meanprops=dict(lw=2, linestyle='-', color='dodgerblue'),
+                              showmeans=True, meanline=True,
+                              patch_artist=True)
+    if hist_kwargs is None:
+        hist_kwargs = dict(bins=20, orientation='horizontal', histtype='stepfilled', facecolor='lightgray', edgecolor='black', lw=1, alpha=1)
+    hist_ax_label = [hist_ax_label]*len(data) if isinstance(hist_ax_label, str) else hist_ax_label
+    if scatter_kwargs is None:
+        scatter_kwargs = dict(c='gray', marker='o', s=10, lw=0, alpha=0.1, zorder=4)
+
+    # BOXPLOT
+    bp = ax.boxplot(data, positions=box_x, widths=box_w, **boxplot_kwargs)
+    # Color box patches
+    if box_fc:
+        for patch in bp['boxes']:
+            patch.set(facecolor='lightgray')
+    # Move whisker, cap and flier if halfbox
+    if half_box:
+        for i, (x_i, w_i) in enumerate(zip(box_x, box_w)):
+            bp['whiskers'][2*i].set_xdata([x_i+w_i/2, x_i+w_i/2])
+            bp['whiskers'][2*i+1].set_xdata([x_i+w_i/2, x_i+w_i/2])
+            bp['caps'][2*i].set_xdata(bp['caps'][2*i].get_xdata() + w_i/2)
+            bp['caps'][2*i+1].set_xdata(bp['caps'][2*i+1].get_xdata() + w_i/2)
+            bp['fliers'][i].set_xdata(bp['fliers'][i].get_xdata() + w_i/2)
+
+    # HISTOGRAMS
+    ax_in_list = []
+    for data_i, x_i, w_i, ax_lab in zip(data, box_x, box_w, hist_ax_label):
+        # add scatter plot of data
+        if scatter_data:
+            ax.scatter(np.random.normal(x_i, w_i*0.1, data_i.shape[0]), data_i, **scatter_kwargs)
+        # add an inset ax for the histogram
+        trans = matplotlib.transforms.blended_transform_factory(ax.transData, ax.transAxes)
+        gap = w_i/2 if half_box else w_i/2 + hist_gap
+        ax_in = ax.inset_axes([x_i+gap, 0, hist_width, 1], transform=trans, sharey=ax, zorder=0)
+        ax_in_list.append(ax_in)
+        hist_kwargs.update({'orientation':'horizontal'})
+        ax_in.hist(data_i, **hist_kwargs)
+
+        ax_in.spines['bottom'].set_visible(False)
+        ax_in.spines['right'].set_visible(False)
+        ax_in.spines['left'].set_visible(False)
+        ax_in.set_xlabel(ax_lab)
+        ax_in.xaxis.set_label_position('top')
+        ax_in.tick_params(labelleft=False, left=False,
+                          labelbottom=False, bottom=False,
+                          labeltop=True, top=True)
+    if shared_hist_axis:
+        for ax_i in ax_in_list[1:]:
+            ax_in_list[0].get_shared_x_axes().join(ax_in_list[0], ax_i)
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#
