@@ -62,7 +62,7 @@ def main(config_path):
     data_info_df = pd.read_csv(os.path.join(cfg['path']['DATA'], 'slice_info.csv'))
     data_info_df = data_info_df.drop(data_info_df.columns[0], axis=1)
     vol_df = pd.read_csv(os.path.join(cfg['path']['DATA'], 'volume_info.csv'))
-    vol_df = patient_df.drop(patient_df.columns[0], axis=1)
+    vol_df = vol_df.drop(vol_df.columns[0], axis=1)
 
     # Generate Cross-Val indices at the patient level
     skf = KFold(n_splits=cfg['split']['n_fold'], shuffle=cfg['split']['shuffle'], random_state=seed)
@@ -112,8 +112,8 @@ def main(config_path):
             logger.info(f"Device : {cfg['device']}")
 
             # extract train and test DataFrames + print summary (n samples positive and negatives)
-            train_df = data_info_df[data_info_df.volume.isin(vol_df.loc[train_idx,'volume'].values)]
-            test_df = data_info_df[data_info_df.volume.isin(vol_df.loc[test_idx,'volume'].values)]
+            train_df = data_info_df[data_info_df.volume.isin(vol_df.loc[train_idx,'id'].values)]
+            test_df = data_info_df[data_info_df.volume.isin(vol_df.loc[test_idx,'id'].values)]
             # sample the dataframe to have more or less normal slices
             #n_remove = int(max(0, len(train_df[train_df.Hemorrhage == 0]) - cfg['dataset']['frac_negative'] * len(train_df[train_df.Hemorrhage == 1])))
             #df_remove = train_df[train_df.Hemorrhage == 0].sample(n=n_remove, random_state=seed)
@@ -232,7 +232,7 @@ def get_split_summary_table(all_df, train_df, test_df):
     table.field_names = ['set', 'N total', 'N no-brain', 'N brain', 'frac no-brain', 'frac brain']
     for df, name in zip([all_df, train_df, test_df],['All', 'Train', 'Test']):
         table.add_row([name, len(df), len(df[df.mask_fn == 'None']), len(df[df.mask_fn != 'None']),
-                   f'{len(df[df.mask_fn == 'None'])/len(df):.3%}', f'{len(df[df.mask_fn != 'None'])/len(df):.3%}'])
+                   f"{len(df[df.mask_fn == 'None'])/len(df):.3%}", f"{len(df[df.mask_fn != 'None'])/len(df):.3%}"])
     return table
 
 if __name__ == '__main__':

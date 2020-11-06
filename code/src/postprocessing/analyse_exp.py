@@ -23,7 +23,7 @@ sys.path.append('../../')
 from src.utils.plot_utils import metric_barplot, curve_std, imshow_pred, plot_tsne
 from src.utils.ct_utils import window_ct
 
-def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, save_fn='results_overview.pdf'):
+def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, save_fn='results_overview.pdf', is_brain_exp=False):
     """
     Generate a summary figure of the supervised ICH segmentation experiment.
     """
@@ -67,12 +67,13 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
     gs = fig.add_gridspec(nrows=7, ncols=n_samp, height_ratios=[0.1, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15], hspace=0.4)
     # Loss Evolution Plot
     ax_evo = fig.add_subplot(gs[:2,:4])
-    colors_evo = ['black', 'tomato', 'dodgerblue']
-    serie_names_evo = ['Train Loss', 'Dice (all)', 'Dice (ICH)']
-    curve_std(data_evo, serie_names_evo, colors=colors_evo, ax=ax_evo, lw=1, CI_alpha=0.05, rep_alpha=0.25, plot_rep=True,
-              plot_mean=True, plot_CI=True, legend=True,
-              legend_kwargs=dict(loc='upper left', ncol=3, frameon=False, framealpha=0.0,
-                                 fontsize=fontsize, bbox_to_anchor=(0.0, -0.3), bbox_transform=ax_evo.transAxes))
+    colors_evo = ['black', 'tomato', 'dodgerblue'] if not is_brain_exp else ['black', 'tomato', 'tomato']
+    serie_names_evo = ['Train Loss', 'Dice (all)', 'Dice (ICH)'] if not is_brain_exp else ['All', 'Dice (all)', 'Dice (brain)']
+    if len(loss_list) > 0:
+        curve_std(data_evo, serie_names_evo, colors=colors_evo, ax=ax_evo, lw=1, CI_alpha=0.05, rep_alpha=0.25, plot_rep=True,
+                  plot_mean=True, plot_CI=True, legend=True,
+                  legend_kwargs=dict(loc='upper left', ncol=3, frameon=False, framealpha=0.0,
+                                     fontsize=fontsize, bbox_to_anchor=(0.0, -0.3), bbox_transform=ax_evo.transAxes))
     ax_evo.set_xlabel('Epoch [-]', fontsize=fontsize)
     ax_evo.set_ylabel('Dice Loss [-] ; Dice Coeff. [-]', fontsize=fontsize)
     ax_evo.set_title('Training evolution', fontsize=fontsize, fontweight='bold', loc='left')
@@ -87,7 +88,7 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
     ax_cm_bis = fig.add_subplot(gs[0,5:7])
     # make data
     data_cm = [results_df[['TP', 'TN', 'FP', 'FN']].values, results_df.loc[results_df.label == 1, ['TP', 'TN', 'FP', 'FN']].values, results_df.loc[results_df.label == 0, ['TP', 'TN', 'FP', 'FN']].values]
-    serie_names_cm = ['All', 'ICH only', 'Non-ICH only']
+    serie_names_cm = ['All', 'ICH only', 'Non-ICH only'] if not is_brain_exp else ['All', 'brain only', 'No_brain only']
     group_names_cm = ['TP', 'TN', 'FP', 'FN']
     colors_cm = ['tomato', 'dodgerblue', 'cornflowerblue']
     metric_barplot(data_cm, serie_names=serie_names_cm, group_names=group_names_cm, colors=colors_cm,
@@ -118,7 +119,7 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
     data_dice = [h_padcat(h_padcat(results_df[['Dice']].values, results_df.loc[results_df.label == 1, ['Dice']].values), results_df.loc[results_df.label == 0, ['Dice']].values),
                  h_padcat(h_padcat(slice_df[['Dice']].values, slice_df.loc[slice_df.label == 1, ['Dice']].values), slice_df.loc[slice_df.label == 0, ['Dice']].values)]
 
-    group_names_dice = ['All', 'ICH only', 'Non-ICH only']
+    group_names_dice = ['All', 'ICH only', 'Non-ICH only'] if not is_brain_exp else ['All', 'brain only', 'No_brain only']
     serie_names_dice = ['Volume Dice', 'Slice Dice']
     colors_dice = ['xkcd:pumpkin orange', 'xkcd:peach']#, 'cornflowerblue']
     metric_barplot(data_dice, serie_names=serie_names_dice, group_names=group_names_dice, colors=colors_dice,
@@ -140,11 +141,17 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
             ax_i = fig.add_subplot(gs[k+3, i])
             axs.append(ax_i)
             # load image and window it
-            slice_im = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}.tif'))
+            if not is_brain_exp:
+                slice_im = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}.tif'))
+            else:
+                slice_im = io.imread(os.path.join(data_path, f'{samp_row.volID:03}/ct/{samp_row.slice}.tif'))
             slice_im = window_ct(slice_im, win_center=cfg['data']['win_center'], win_width=cfg['data']['win_width'], out_range=(0,1))
             # load truth mask
             if is_ICH == 1:
-                slice_trg = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}_ICH_Seg.bmp'))
+                if not is_brain_exp:
+                    slice_trg = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}_ICH_Seg.bmp'))
+                else:
+                    slice_trg = io.imread(os.path.join(data_path, f'{samp_row.volID:03}/mask/{samp_row.slice}_Seg.bmp'))
             else:
                 slice_trg = np.zeros_like(slice_im)
             slice_trg = slice_trg.astype('bool')
@@ -165,7 +172,7 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
                                           1.3*pos.height,
                                           fc='black', ec='black', alpha=1, zorder=-1,
                                           transform=fig.transFigure, figure=fig)])
-        axs[0].text(-0.25, 0.5, f"{'Low' if asc else 'High'}est Dice\n({'non-' if is_ICH == 0 else ''}ICH)",
+        axs[0].text(-0.25, 0.5, f"{'Low' if asc else 'High'}est Dice\n({'non-' if is_ICH == 0 else ''}{'ICH' if not is_brain_exp else 'brain'})",
                  fontsize=10, fontweight='bold', ha='center', va='center', rotation=90, color='lightgray', transform=axs[0].transAxes)
 
 
@@ -198,13 +205,14 @@ def analyse_representation_exp(exp_folder, save_fn='results_overview.pdf'):
     # plot loss evolution
     ax_loss = fig.add_subplot(gs[0, :5])
     loss_evol = np.array(outputs_dict['train']['evolution'])
-    ax_loss.plot(loss_evol[:,0], loss_evol[:,1], lw=2, color='black')
+    if loss_evol.ndim > 1:
+        ax_loss.plot(loss_evol[:,0], loss_evol[:,1], lw=2, color='black')
     ax_loss.set_xlim(left=1)
     ax_loss.set_ylim(bottom=0)
     ax_loss.spines['top'].set_visible(False)
     ax_loss.spines['right'].set_visible(False)
     ax_loss.set_xlabel('Epoch [-]')
-    ax_loss.set_ylabel('MSE Loss [-]')
+    ax_loss.set_ylabel('Loss [-]')
     ax_loss.set_title('Loss Evolution', fontsize=10, fontweight='bold', loc='left')
     # plot tsne ICH vs No-ICH
     ax_repr = fig.add_subplot(gs[0, 6:9])
