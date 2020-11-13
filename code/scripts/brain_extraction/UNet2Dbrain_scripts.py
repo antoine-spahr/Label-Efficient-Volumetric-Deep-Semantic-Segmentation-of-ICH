@@ -36,7 +36,7 @@ from src.postprocessing.analyse_exp import analyse_supervised_exp
 def main(config_path):
     """
     Train and evaluate a 2D UNet on the brain extraction dataset using the parameters sepcified on the JSON at the
-    config_path. The evaluation is performed by k-fold cross-validation.
+    config_path. The evaluation is performed by k-fold cross-validation. Then the same model is trained on all the data.
     """
     # load config file
     with open(config_path, 'r') as fp:
@@ -114,10 +114,6 @@ def main(config_path):
             # extract train and test DataFrames + print summary (n samples positive and negatives)
             train_df = data_info_df[data_info_df.volume.isin(vol_df.loc[train_idx,'id'].values)]
             test_df = data_info_df[data_info_df.volume.isin(vol_df.loc[test_idx,'id'].values)]
-            # sample the dataframe to have more or less normal slices
-            #n_remove = int(max(0, len(train_df[train_df.Hemorrhage == 0]) - cfg['dataset']['frac_negative'] * len(train_df[train_df.Hemorrhage == 1])))
-            #df_remove = train_df[train_df.Hemorrhage == 0].sample(n=n_remove, random_state=seed)
-            #train_df = train_df[~train_df.index.isin(df_remove.index)]
             logger.info('\n' + str(get_split_summary_table(data_info_df, train_df, test_df)))
 
             # Make Dataset + print online augmentation summary
@@ -137,7 +133,8 @@ def main(config_path):
             # Make architecture (and print summmary ??)
             unet_arch = UNet(depth=cfg['net']['depth'], top_filter=cfg['net']['top_filter'],
                              use_3D=cfg['net']['3D'], in_channels=cfg['net']['in_channels'],
-                             out_channels=cfg['net']['out_channels'], bilinear=cfg['net']['bilinear'])
+                             out_channels=cfg['net']['out_channels'], bilinear=cfg['net']['bilinear'],
+                             midchannels_factor=cfg['net']['midchannels_factor'], p_dropout=cfg['net']['p_dropout'])
             unet_arch.to(cfg['device'])
             logger.info(f"U-Net2D initialized with a depth of {cfg['net']['depth']}"
                         f" and a number of initial filter of {cfg['net']['top_filter']},")
@@ -221,8 +218,119 @@ def main(config_path):
     logger.info('Config file saved at ' + os.path.join(out_path, 'config.json'))
 
     # Analyse results
-    analyse_supervised_exp(out_path, cfg['path']['DATA'], cfg['split']['n_fold'], save_fn=os.path.join(out_path, 'results_overview.pdf'))
+    analyse_supervised_exp(out_path, cfg['path']['DATA'], cfg['split']['n_fold'], save_fn=os.path.join(out_path, 'results_overview.pdf'), is_brain_exp=True)
     logger.info('Results overview figure saved at ' + os.path.join(out_path, 'results_overview.pdf'))
+
+    ############################################# Train on All Data ####################################################
+    # make dir
+    os.makedirs(os.path.join(out_path, 'Final'), exist_ok=True)
+
+    # initialize logger
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger()
+    try:
+        logger.handlers[1].stream.close()
+        logger.removeHandler(logger.handlers[1])
+    except IndexError:
+        pass
+    logger.setLevel(logging.INFO)
+    file_handler = logging.FileHandler(os.path.join(out_path, f'Final/log.txt'))
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+    logger.addHandler(file_handler)
+
+    if os.path.exists(os.path.join(out_path, f'Final/checkpoint.pt')):
+        logger.info('\n' + '#'*30 + f'\n Recovering Session \n' + '#'*30)
+
+    logger.info(f"Experiment : {cfg['exp_name']}")
+    logger.info(f"Final Training on all the data.")
+
+    # initialize nbr of thread
+    if cfg['n_thread'] > 0:
+        torch.set_num_threads(cfg['n_thread'])
+    logger.info(f"Number of thread : {cfg['n_thread']}")
+    # check if GPU available
+    if cfg['device'] is not None:
+        cfg['device'] = torch.device(cfg['device'])
+    else:
+        if torch.cuda.is_available():
+            free_mem, device_idx = 0.0, 0
+            for d in range(torch.cuda.device_count()):
+                mem = torch.cuda.get_device_properties(d).total_memory - torch.cuda.memory_allocated(d)
+                if mem > free_mem:
+                    device_idx = d
+                    free_mem = mem
+            cfg['device'] = torch.device(f'cuda:{device_idx}')
+        else:
+            cfg['device'] = torch.device('cpu')
+    logger.info(f"Device : {cfg['device']}")
+
+    # Make Dataset
+    dataset = brain_extract_Dataset2D(data_info_df, cfg['path']['DATA'],
+                                      augmentation_transform=[getattr(tf, tf_name)(**tf_kwargs) for tf_name, tf_kwargs in cfg['data']['augmentation']['train'].items()],
+                                      window=(cfg['data']['win_center'], cfg['data']['win_width']),
+                                      output_size=cfg['data']['size'])
+    logger.info(f"Data will be loaded from {cfg['path']['DATA']}.")
+    logger.info(f"CT scans will be windowed on [{cfg['data']['win_center']-cfg['data']['win_width']/2} ; {cfg['data']['win_center'] + cfg['data']['win_width']/2}]")
+    logger.info(f"Training online data transformation: \n\n {str(dataset.transform)}\n")
+
+    # Make architecture
+    unet_arch = UNet(depth=cfg['net']['depth'], top_filter=cfg['net']['top_filter'],
+                     use_3D=cfg['net']['3D'], in_channels=cfg['net']['in_channels'],
+                     out_channels=cfg['net']['out_channels'], bilinear=cfg['net']['bilinear'],
+                     midchannels_factor=cfg['net']['midchannels_factor'], p_dropout=cfg['net']['p_dropout'])
+    unet_arch.to(cfg['device'])
+    logger.info(f"U-Net2D initialized with a depth of {cfg['net']['depth']}"
+                f" and a number of initial filter of {cfg['net']['top_filter']},")
+    logger.info(f"Reconstruction performed with {'Upsample + Conv' if cfg['net']['bilinear'] else 'ConvTranspose'}.")
+    logger.info(f"U-Net2D takes {cfg['net']['in_channels']} as input channels and {cfg['net']['out_channels']} as output channels.")
+    logger.info(f"The U-Net2D has {sum(p.numel() for p in unet_arch.parameters())} parameters.")
+
+    # Make model
+    unet2D = UNet2D(unet_arch, n_epoch=cfg['train']['n_epoch'], batch_size=cfg['train']['batch_size'],
+                    lr=cfg['train']['lr'], lr_scheduler=getattr(torch.optim.lr_scheduler, cfg['train']['lr_scheduler']),
+                    lr_scheduler_kwargs=cfg['train']['lr_scheduler_kwargs'],
+                    loss_fn=getattr(src.models.optim.LossFunctions, cfg['train']['loss_fn']),
+                    loss_fn_kwargs=cfg['train']['loss_fn_kwargs'], weight_decay=cfg['train']['weight_decay'],
+                    num_workers=cfg['train']['num_workers'], device=cfg['device'],
+                    print_progress=cfg['print_progress'])
+
+    # use pretrain weight if required
+    if cfg['train']['init_weight']:
+        init_state_dict = torch.load(cfg['train']['init_weight'], map_location=cfg['device'])
+        unet2D.transfer_weights(init_state_dict, verbose=True)
+
+    # Load model if required
+    if cfg['train']['model_path_to_load']:
+        if isinstance(cfg['train']['model_path_to_load'], str):
+            model_path = cfg['train']['model_path_to_load']
+            unet2D.load_model(model_path, map_location=cfg['device'])
+        elif isinstance(cfg['train']['model_path_to_load'], list):
+            model_path = cfg['train']['model_path_to_load'][0]
+            unet2D.load_model(model_path, map_location=cfg['device'])
+        else:
+            raise ValueError(f'Model path to load type not understood.')
+        logger.info(f"2D U-Net model loaded from {model_path}")
+
+    # print Training hyper-parameters
+    train_params = []
+    for key, value in cfg['train'].items():
+        train_params.append(f"--> {key} : {value}")
+    logger.info('Training settings:\n\t' + '\n\t'.join(train_params))
+
+    # Train model
+    unet2D.train(dataset, valid_dataset=None, checkpoint_path=os.path.join(out_path, f'Final/checkpoint.pt'))
+
+    # Save models & outputs
+    unet2D.save_model(os.path.join(out_path, f'Final/trained_unet.pt'))
+    logger.info("Trained U-Net saved at " + os.path.join(out_path, f'Final/trained_unet.pt'))
+    unet2D.save_outputs(os.path.join(out_path, f'Final/outputs.json'))
+    logger.info("Trained statistics saved at " + os.path.join(out_path, f'Final/outputs.json'))
+
+    # delete checkpoint if exists
+    if os.path.exists(os.path.join(out_path, f'Final/checkpoint.pt')):
+        os.remove(os.path.join(out_path, f'Final/checkpoint.pt'))
+        logger.info('Checkpoint deleted.')
 
 def get_split_summary_table(all_df, train_df, test_df):
     """

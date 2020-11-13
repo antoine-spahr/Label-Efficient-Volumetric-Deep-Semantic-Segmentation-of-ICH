@@ -31,9 +31,10 @@ from src.utils.ct_utils import window_ct
 @click.option("--win", type=str, default='[50, 200]', help="The windowing to apply to the CT-scan as [win_center, win_width]. Default: [50, 200].")
 @click.option("--cam_view", type=str, default=None, help="The camera position to be specified at pyvista with shape [(pos1, pos2, pos3), (foc1, foc2, foc3), (viewup1, viewup2, viewup3)]. Default: isotropic view")
 @click.option("--isoval", type=float, default=1.0, help="The Isovalue used to generate a mesh form the volume. Default is 1.0.")
+@click.option("--vol_alpha", type=float, default=0.3, help="The volume opacity for the 3D rendering. Default 0.3.")
 @click.option("--overlap/--no_overlap", default=True, help="Whether the target and prediction are plotteed on the same image or separately. Default True.")
 @click.option("--save_fn", type=click.Path(exists=False), default=None, help="Where to save the figure. Default is the current location named as slice1_slice2_slice3.pdf.")
-def main(vol_fn, slice, pred_fn, trgt_fn, pred_color, trgt_color, win, cam_view, isoval, overlap, save_fn):
+def main(vol_fn, slice, pred_fn, trgt_fn, pred_color, trgt_color, win, cam_view, isoval, vol_alpha, overlap, save_fn):
     """
     Provide an axial, sagital, coronal and 3D view of the Nifti volume at vol_fn. The view are cross sections given by
     the integer in slice ([axial, sagital, coronal]). If a prediction and/or target is provided, the mask is/are overlaid
@@ -41,7 +42,7 @@ def main(vol_fn, slice, pred_fn, trgt_fn, pred_color, trgt_color, win, cam_view,
     """
     slice = ast.literal_eval(slice)
     win = ast.literal_eval(win)
-    cam_view = ast.literal_eval(cam_view)
+    cam_view = ast.literal_eval(cam_view) if cam_view else None
     # load volume
     vol_nii = nib.load(vol_fn)
     aspect_ratio = vol_nii.header['pixdim'][3] / vol_nii.header['pixdim'][2]
@@ -60,7 +61,7 @@ def main(vol_fn, slice, pred_fn, trgt_fn, pred_color, trgt_color, win, cam_view,
     # get 3D rendering
     data = pv.wrap(vol)
     data.spacing = vol_nii.header['pixdim'][1:4]
-    surface = data.contour([1],)
+    surface = data.contour([isoval],)
     if pred_fn:
         data_pred = pv.wrap(pred)
         data_pred.spacing = pred_nii.header['pixdim'][1:4]
@@ -75,7 +76,7 @@ def main(vol_fn, slice, pred_fn, trgt_fn, pred_color, trgt_color, win, cam_view,
         # make 3D pred rendering
         p = pv.Plotter(off_screen=True, window_size=[512, 512])
         p.background_color = 'black'
-        p.add_mesh(surface, opacity=0.3, clim=data.get_data_range(), color='lightgray')
+        p.add_mesh(surface, opacity=vol_alpha, clim=data.get_data_range(), color='lightgray')
         p.add_mesh(surface_pred, opacity=1, color=pred_color)
         if cpos:
             p.camera_position = cpos
@@ -85,7 +86,7 @@ def main(vol_fn, slice, pred_fn, trgt_fn, pred_color, trgt_color, win, cam_view,
         # make 3D trgt rendering
         p = pv.Plotter(off_screen=True, window_size=[512, 512])
         p.background_color = 'black'
-        p.add_mesh(surface, opacity=0.3, clim=data.get_data_range(), color='lightgray')
+        p.add_mesh(surface, opacity=vol_alpha, clim=data.get_data_range(), color='lightgray')
         p.add_mesh(surface_trgt, opacity=1, color=trgt_color)
         if cpos:
             p.camera_position = cpos
@@ -153,7 +154,7 @@ def main(vol_fn, slice, pred_fn, trgt_fn, pred_color, trgt_color, win, cam_view,
         # make 3D rendering
         p = pv.Plotter(off_screen=True, window_size=[512, 512])
         p.background_color = 'black'
-        p.add_mesh(surface, opacity=0.3, clim=data.get_data_range(), color='lightgray')
+        p.add_mesh(surface, opacity=vol_alpha, clim=data.get_data_range(), color='lightgray')
         if pred_fn:
             p.add_mesh(surface_pred, opacity=1, color=pred_color)
         if trgt_fn:
@@ -180,7 +181,7 @@ def main(vol_fn, slice, pred_fn, trgt_fn, pred_color, trgt_color, win, cam_view,
         # Sagital
         legend, legend_kwargs = False, None
         if pred_fn is not None or trgt_fn is not None:
-            legend = True
+            legend = True if trgt_fn is not None and pred_fn is not None else False
             legend_kwargs = dict(loc='upper center', ncol=2, frameon=False, labelcolor='white',
                                  framealpha=0.0, fontsize=10, bbox_to_anchor=(0.5, -0.1),
                                  bbox_transform=axs[1].transAxes)
