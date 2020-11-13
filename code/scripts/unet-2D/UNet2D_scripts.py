@@ -140,7 +140,8 @@ def main(config_path):
             # Make architecture (and print summmary ??)
             unet_arch = UNet(depth=cfg.settings['net']['depth'], top_filter=cfg.settings['net']['top_filter'],
                              use_3D=cfg.settings['net']['3D'], in_channels=cfg.settings['net']['in_channels'],
-                             out_channels=cfg.settings['net']['out_channels'], bilinear=cfg.settings['net']['bilinear'])
+                             out_channels=cfg.settings['net']['out_channels'], bilinear=cfg.settings['net']['bilinear'],
+                             midchannels_factor=cfg.settings['net']['midchannels_factor'], p_dropout=cfg.settings['net']['p_dropout'])
             unet_arch.to(cfg.settings['device'])
             logger.info(f"U-Net2D initialized with a depth of {cfg.settings['net']['depth']}"
                         f" and a number of initial filter of {cfg.settings['net']['top_filter']},")

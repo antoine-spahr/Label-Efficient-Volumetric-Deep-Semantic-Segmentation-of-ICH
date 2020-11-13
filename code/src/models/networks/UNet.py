@@ -17,7 +17,8 @@ class UNet(nn.Module):
     """
     U-Net model as a Pytorch nn.Module. The class enables to build 2D and 3D U-Nets with different depth.
     """
-    def __init__(self, depth=5, use_3D=False, bilinear=False, in_channels=1, out_channels=1, top_filter=64, use_final_activation=True):
+    def __init__(self, depth=5, use_3D=False, bilinear=False, in_channels=1, out_channels=1, top_filter=64, midchannels_factor=2,
+                 p_dropout=0.5, use_final_activation=True):
         """
         Build a 2D or 3D U-Net Module.
         ----------
@@ -30,11 +31,24 @@ class UNet(nn.Module):
             |---- in_channels (int) the number of input channels to the U-Net
             |---- out_channels (int) the number of output channels (i.e. the number of segemtnation classes).
             |---- top_filter (int) the number of channels after the first double-convolution block.
+            |---- midchannels_factor (int) defines the number of mid-channels in the convolutional blocks as
+            |           mid_channels = out_channels // midchannels_factor.
+            |---- p_dropout (float or list) dropout probability in down block. If a float is passed, the same dropout
+            |           probability is applied to each down convolutional block. If a list is passed, it should have a
+            |           length equal depth which specify the dropout probability for each block.
             |---- use_final_activation (bool) whether to use a final activation layer (Simoid or Softmax).
         OUTPUT
             |---- U-Net (nn.Module) The U-Net.
         """
         super(UNet, self).__init__()
+        # check if dropout input
+        if isinstance(p_dropout, float):
+            p_dropout_list = [p_dropout]*depth
+        elif isinstance(p_dropout, list):
+            assert len(p_dropout) == depth, f'p_dropout provided as list should have the same length as depth. p_dropout {len(p_dropout)} vs depth {depth}.'
+            p_dropout_list = p_dropout
+        else:
+            raise TypeError(f'p_dropout list not supported. Should be float or list of float. Given {type(p_dropout)}.')
         # Network attribute to return or not the bottleneck representation
         self.return_bottleneck = False
         # Initialize Modules Lists for the encoder, decoder, and upsampling blocks
@@ -47,8 +61,8 @@ class UNet(nn.Module):
         up_filter_list = [(top_filter*(2**d), top_filter*(2**(d-1))) for d in range(depth-1, 0, -1)]
 
         # initialize blocks
-        for down_ch, up_ch in zip(down_filter_list, up_filter_list):
-            self.down_block.append(ConvBlock(down_ch[0], down_ch[1], mid_channels=down_ch[1]//2, use_3D=use_3D))
+        for down_ch, up_ch, p_drop in zip(down_filter_list, up_filter_list, p_dropout_list[:-1]):
+            self.down_block.append(ConvBlock(down_ch[0], down_ch[1], mid_channels=down_ch[1]//midchannels_factor, use_3D=use_3D, p_dropout=p_drop))
             # Define the synthesis strategy (trasnposed convolution vs upsampling)
             if bilinear:
                 self.up_block.append(ConvBlock(int(1.5*up_ch[0]), up_ch[1], mid_channels=up_ch[1], use_3D=use_3D))
@@ -60,7 +74,8 @@ class UNet(nn.Module):
                 self.up_samp.append(convT(up_ch[0], up_ch[1], kernel_size=2, stride=2))
 
         # bottelneck convolutional block
-        self.bottleneck_block = ConvBlock(bottleneck_filter[0], bottleneck_filter[1], mid_channels=bottleneck_filter[1]//2, use_3D=use_3D)
+        self.bottleneck_block = ConvBlock(bottleneck_filter[0], bottleneck_filter[1], mid_channels=bottleneck_filter[1]//midchannels_factor,
+                                          use_3D=use_3D, p_dropout=p_dropout_list[-1])
         # Down pooling module
         self.downpool = nn.MaxPool3d(kernel_size=2, stride=2) if use_3D else nn.MaxPool2d(kernel_size=2, stride=2)
         # define the final convolution (1x1(x1)) convolution follow by a sigmoid.
@@ -113,7 +128,7 @@ class ConvBlock(nn.Module):
     """
     Double convolution modules used for each block of the U-Nets. It's composed of a succesion of two [Conv -> BN -> ReLU].
     """
-    def __init__(self, in_channels, out_channels, mid_channels=None, kernel_size=3, use_3D=False):
+    def __init__(self, in_channels, out_channels, mid_channels=None, kernel_size=3, use_3D=False, p_dropout=0.0):
         """
         Build a Double Convolution block.
         ----------
@@ -123,11 +138,14 @@ class ConvBlock(nn.Module):
             |---- mid_channels (int) the number of channel after the first convolution. If not provided, it's set to out_channels.
             |---- kernel_size (int) the kernel size to use in the convolution layers.
             |---- use_3D (bool) whether the layers use must be for volumetric inputs.
+            |---- p_dropout (float) probability of dropout. If 0.0 no dropout applied.
         OUTPUT
             |---- ConvBlock (nn.Modules) a double convoltution module.
         """
         super(ConvBlock, self).__init__()
+        assert 0.0 <= p_dropout <= 1.0, f'Dropout probaility must be in [0.0, 1.0]. Given {p_dropout}.'
         self.activation = nn.ReLU()
+        self.dropout = nn.Dropout(p=p_dropout)
         mid_channels = mid_channels if mid_channels else out_channels
         if use_3D:
             self.conv1 = nn.Conv3d(in_channels=in_channels, out_channels=mid_channels, kernel_size=kernel_size, padding=1)
@@ -152,7 +170,8 @@ class ConvBlock(nn.Module):
         """
         x = self.activation(self.bn1(self.conv1(input)))
         out = self.activation(self.bn2(self.conv2(x)))
-
+        if self.dropout.p > 0.0:
+            out = self.dropout(out)
         return out
 
 class MLPHead(nn.Module):
@@ -225,7 +244,8 @@ class UNet_Encoder(nn.Module):
     """
     U-Net model as a Pytorch nn.Module. The class enables to build 2D and 3D U-Nets with different depth.
     """
-    def __init__(self, depth=5, use_3D=False, in_channels=1, MLP_head=[256, 128], top_filter=64):
+    def __init__(self, depth=5, use_3D=False, in_channels=1, MLP_head=[256, 128], top_filter=64, midchannels_factor=2,
+                 p_dropout=0.5):
         """
         Build a 2D or 3D U-Net Module.
         ----------
@@ -235,10 +255,23 @@ class UNet_Encoder(nn.Module):
             |---- in_channels (int) the number of input channels to the U-Net
             |---- MLP_head (list of int) the structure of the additional MLP head to the convolutional encoder.
             |---- top_filter (int) the number of channels after the first double-convolution block.
+            |---- midchannels_factor (int) defines the number of mid-channels in the convolutional blocks as
+            |           mid_channels = out_channels // midchannels_factor.
+            |---- p_dropout (float or list) dropout probability in down block. If a float is passed, the same dropout
+            |           probability is applied to each down convolutional block. If a list is passed, it should have a
+            |           length equal depth which specify the dropout probability for each block.
         OUTPUT
             |---- U-Net Encoder (nn.Module) The U-Net Encoder.
         """
         super(UNet_Encoder, self).__init__()
+        # check if dropout input
+        if isinstance(p_dropout, float):
+            p_dropout_list = [p_dropout]*depth
+        elif isinstance(p_dropout, list):
+            assert len(p_dropout) == depth, f'p_dropout provided as list should have the same length as depth. p_dropout {len(p_dropout)} vs depth {depth}.'
+            p_dropout_list = p_dropout
+        else:
+            raise TypeError(f'p_dropout list not supported. Should be float or list of float. Given {type(p_dropout)}.')
         # Network attribute to return or not the bottleneck representation
         self.return_bottleneck = False
         # Initialize Modules Lists for the encoder, decoder, and upsampling blocks
@@ -248,11 +281,12 @@ class UNet_Encoder(nn.Module):
         bottleneck_filter = (top_filter*(2**(depth-2)), top_filter*(2**(depth-1)))
 
         # initialize blocks
-        for down_ch in down_filter_list:#, up_ch in zip(down_filter_list, up_filter_list):
-            self.down_block.append(ConvBlock(down_ch[0], down_ch[1], mid_channels=down_ch[1]//2, use_3D=use_3D))
+        for down_ch, p_drop in zip(down_filter_list, p_dropout_list[:-1]):#, up_ch in zip(down_filter_list, up_filter_list):
+            self.down_block.append(ConvBlock(down_ch[0], down_ch[1], mid_channels=down_ch[1]//midchannels_factor, use_3D=use_3D, p_dropout=p_drop))
 
         # bottelneck convolutional block
-        self.bottleneck_block = ConvBlock(bottleneck_filter[0], bottleneck_filter[1], mid_channels=bottleneck_filter[1]//2, use_3D=use_3D)
+        self.bottleneck_block = ConvBlock(bottleneck_filter[0], bottleneck_filter[1], mid_channels=bottleneck_filter[1]//midchannels_factor,
+                                          use_3D=use_3D, p_dropout=p_dropout_list[-1])
         # Down pooling module
         self.downpool = nn.MaxPool3d(kernel_size=2, stride=2) if use_3D else nn.MaxPool2d(kernel_size=2, stride=2)
         # MLP Head
@@ -294,7 +328,8 @@ class Partial_UNet(nn.Module):
     A partial U-Net model as a Pytorch nn.Module. It's composed of a U-Net encoder and only a partial decoder (to be used
     in the local contrastive pretraining of Chaitanya 2020).
     """
-    def __init__(self, depth=5, n_decoder=3, use_3D=False, bilinear=False, in_channels=1, head_channel=[64, 32], top_filter=64):
+    def __init__(self, depth=5, n_decoder=3, use_3D=False, bilinear=False, in_channels=1, head_channel=[64, 32],
+                 top_filter=64, midchannels_factor=2, p_dropout=0.5):
         """
         Build a 2D or 3D U-Net Module.
         ----------
@@ -308,10 +343,23 @@ class Partial_UNet(nn.Module):
             |---- head_channel (list of int) the channel to use for the 1x1 convolution after the partial decoding. (length
             |           of list defines the number of 1x1 convolutions)
             |---- top_filter (int) the number of channels after the first double-convolution block.
+            |---- midchannels_factor (int) defines the number of mid-channels in the convolutional blocks as
+            |           mid_channels = out_channels // midchannels_factor.
+            |---- p_dropout (float or list) dropout probability in down block. If a float is passed, the same dropout
+            |           probability is applied to each down convolutional block. If a list is passed, it should have a
+            |           length equal depth which specify the dropout probability for each block.
         OUTPUT
             |---- U-Net (nn.Module) The U-Net.
         """
         super(Partial_UNet, self).__init__()
+        # check if dropout input
+        if isinstance(p_dropout, float):
+            p_dropout_list = [p_dropout]*depth
+        elif isinstance(p_dropout, list):
+            assert len(p_dropout) == depth, f'p_dropout provided as list should have the same length as depth. p_dropout {len(p_dropout)} vs depth {depth}.'
+            p_dropout_list = p_dropout
+        else:
+            raise TypeError(f'p_dropout list not supported. Should be float or list of float. Given {type(p_dropout)}.')
         # Network attribute to return or not the bottleneck representation
         self.return_bottleneck = False
         # Initialize Modules Lists for the encoder, decoder, and upsampling blocks
@@ -326,8 +374,8 @@ class Partial_UNet(nn.Module):
         self.n_decoder = n_decoder
 
         # initialize down blocks
-        for down_ch in down_filter_list: #down_ch, up_ch in zip(down_filter_list, up_filter_list):
-            self.down_block.append(ConvBlock(down_ch[0], down_ch[1], mid_channels=down_ch[1]//2, use_3D=use_3D))
+        for down_ch, p_drop in zip(down_filter_list, p_dropout_list[:-1]): #down_ch, up_ch in zip(down_filter_list, up_filter_list):
+            self.down_block.append(ConvBlock(down_ch[0], down_ch[1], mid_channels=down_ch[1]//midchannels_factor, use_3D=use_3D, p_dropout=p_drop))
         # initialize up block
         for up_ch in up_filter_list:
             # Define the synthesis strategy (trasnposed convolution vs upsampling)
@@ -341,7 +389,8 @@ class Partial_UNet(nn.Module):
                 self.up_samp.append(convT(up_ch[0], up_ch[1], kernel_size=2, stride=2))
 
         # bottelneck convolutional block
-        self.bottleneck_block = ConvBlock(bottleneck_filter[0], bottleneck_filter[1], mid_channels=bottleneck_filter[1]//2, use_3D=use_3D)
+        self.bottleneck_block = ConvBlock(bottleneck_filter[0], bottleneck_filter[1], mid_channels=bottleneck_filter[1]//midchannels_factor,
+                                          use_3D=use_3D, p_dropout=p_dropout_list[-1])
         # Down pooling module
         self.downpool = nn.MaxPool3d(kernel_size=2, stride=2) if use_3D else nn.MaxPool2d(kernel_size=2, stride=2)
         # define the final layer as a combbination of 1x1 convolution (~local MLP)

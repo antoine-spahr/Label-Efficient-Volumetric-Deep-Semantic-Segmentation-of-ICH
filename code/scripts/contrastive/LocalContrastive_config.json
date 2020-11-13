@@ -25,7 +25,7 @@
       "augmentation":{
         "train":{
           "Translate": {"low": -0.1, "high": 0.1},
-          "Rotate": {"low": -15, "high": 15},
+          "Rotate": {"low": -45, "high": 45},
           "Scale": {"low": 0.9, "high": 1.1}
         },
         "eval":{}
@@ -50,7 +50,9 @@
         "top_filter": 32,
         "3D": false,
         "in_channels": 1,
-        "MLP_head": [1024, 128]
+        "MLP_head": [512, 128],
+        "midchannels_factor": 1,
+        "p_dropout": 0.5
       },
       "train":{
         "model_path_to_load": null,
@@ -78,7 +80,9 @@
         "3D": false,
         "in_channels": 1,
         "head_channel": [128, 32],
-        "bilinear": false
+        "bilinear": false,
+        "midchannels_factor": 1,
+        "p_dropout": 0.5
       },
       "train":{
         "model_path_to_load": null,
@@ -124,7 +128,9 @@
       "3D": false,
       "in_channels": 1,
       "out_channels": 1,
-      "bilinear": false
+      "bilinear": false,
+      "midchannels_factor": 1,
+      "p_dropout": 0.5
     },
     "train":{
       "model_path_to_load": null,

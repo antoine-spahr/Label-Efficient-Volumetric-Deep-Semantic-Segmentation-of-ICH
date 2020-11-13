@@ -127,9 +127,10 @@ def main(config_path):
 
     # Make U-Net architecture
     net_ssl = UNet(depth=cfg['SSL']['net']['depth'], top_filter=cfg['SSL']['net']['top_filter'],
-                     use_3D=cfg['SSL']['net']['3D'], in_channels=cfg['SSL']['net']['in_channels'],
-                     out_channels=cfg['SSL']['net']['out_channels'], bilinear=cfg['SSL']['net']['bilinear'],
-                     use_final_activation=cfg['SSL']['net']['final_activation'])
+                   use_3D=cfg['SSL']['net']['3D'], in_channels=cfg['SSL']['net']['in_channels'],
+                   out_channels=cfg['SSL']['net']['out_channels'], bilinear=cfg['SSL']['net']['bilinear'],
+                   use_final_activation=cfg['SSL']['net']['final_activation'], midchannels_factor=cfg['SSL']['net']['midchannels_factor'],
+                   p_dropout=cfg['SSL']['net']['p_dropout'])
     net_ssl.to(cfg['device'])
     logger.info(f"U-Net2D initialized with a depth of {cfg['SSL']['net']['depth']}"
                 f" and a number of initial filter of {cfg['SSL']['net']['top_filter']},")
@@ -226,7 +227,8 @@ def main(config_path):
             # Make U-Net architecture
             unet_sup = UNet(depth=cfg['Sup']['net']['depth'], top_filter=cfg['Sup']['net']['top_filter'],
                              use_3D=cfg['Sup']['net']['3D'], in_channels=cfg['Sup']['net']['in_channels'],
-                             out_channels=cfg['Sup']['net']['out_channels'], bilinear=cfg['Sup']['net']['bilinear'])
+                             out_channels=cfg['Sup']['net']['out_channels'], bilinear=cfg['Sup']['net']['bilinear'],
+                             midchannels_factor=cfg['Sup']['net']['midchannels_factor'], p_dropout=cfg['Sup']['net']['p_dropout'])
             unet_sup.to(cfg['device'])
             logger.info(f"U-Net2D initialized with a depth of {cfg['Sup']['net']['depth']}"
                         f" and a number of initial filter of {cfg['Sup']['net']['top_filter']},")

@@ -62,6 +62,57 @@ class BinaryDiceLoss(nn.Module):
         elif self.reduction == 'none':
             return DL
 
+class TverskyLoss(nn.Module):
+    """
+    Define the Tversky loss as a pytorch nn.Module.add_module
+    """
+    def __init__(self, alpha=1.0, beta=0.5, gamma=0.5, reduction='mean'):
+        """
+        Build a Binary Dice Loss Module.
+        ----------
+        INPUT
+            |---- reduction (str) the reduction to apply over the batch. Default is 'mean'. Other options are: 'none' and 'sum'
+            |---- alpha (float) the weight of prediction for ground truth without positive (Prediction's loss reduced if alpha < 1.0)
+            |---- beta (float) the weight given to False negatives.
+            |---- gamma (float) the weight given to False Positives.
+        OUTPUT
+            |---- TverskyLoss (nn.Module) the Loss module.
+        """
+        super(TverskyLoss, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.reduction = reduction
+        self.eps = 1
+
+    def forward(self, pred, mask):
+        """
+        Forward pass of the Tverzsky Loss defined as the 1-TverskyCoeff.
+        ----------
+        INPUT
+            |---- pred (torch.tensor) the binary prediction with dimension (Batch x Output Dimension).
+            |---- mask (torch.tensor) the binary ground truth with dimension (Batch x Output Dimension).
+        OUTPUT
+            |---- TL (torch.tensor) the Tvresky Loss with the selected reduction over the Batch.
+        """
+        assert pred.shape == mask.shape, f'Prediction and Mask should have the same dimensions! Given: Prediction {pred.shape} / Mask {mask.shape}'
+        sum_dim = tuple(range(1, pred.ndim)) # dimension of over which to sum : skip the batch dimension
+        # compute TP, FP, FN
+        TP = torch.sum(pred * mask, dim=sum_dim)
+        FP = torch.sum(pred * (1 - mask), dim=sum_dim)
+        FN = torch.sum((1 - pred) * mask, dim=sum_dim)
+        # compute TF_loss
+        TL = 1 - (TP + self.eps) / (TP + self.beta * FN + self.gamma * FP + self.eps)
+        # scale loss of samples without positives on mask
+        TL = torch.where(mask.sum(dim=sum_dim) > 0, TL, self.alpha * TL)
+        # Apply the reduction
+        if self.reduction == 'mean':
+            return TL.mean()
+        elif self.reduction == 'sum':
+            return TL.sum()
+        elif self.reduction == 'none':
+            return TL
+
 class ComboLoss(nn.Module):
     """
     Define the ComboLoss described by Asgari et al. It combines a Dice loss and a Binary cross entropy (BCE) loss in which
@@ -253,8 +304,6 @@ class LocalInfoNCELoss(nn.Module):
         out[:,:mask.shape[1],:mask.shape[2]] = mask
 
         return out
-
-#torch.arange(0, bs).unsqueeze(1).repeat(1,15).view(-1)
 
     def forward(self, f1, f2):
         """

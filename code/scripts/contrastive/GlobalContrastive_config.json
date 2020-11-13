@@ -1,5 +1,5 @@
 {
-  "exp_name": "GlobalContrastiveUNet2D",
+  "exp_name": "GlobalContrastiveUNet2D_strong",
   "path":{
     "data":{
       "Sup": "../../../data/publicSegICH2D/",
@@ -24,16 +24,17 @@
       "n_eval_neg": 1000,
       "augmentation":{
         "train":{
-          "Translate": {"low": -0.1, "high": 0.1},
-          "Rotate": {"low": -15, "high": 15},
-          "Scale": {"low": 0.9, "high": 1.1}
+          "Translate": {"low": -0.15, "high": 0.15},
+          "Rotate": {"low": -45, "high": 45},
+          "Scale": {"low": 0.8, "high": 1.2}
         },
         "eval":{}
       },
       "contrastive_augmentation":{
         "global":{
           "HFlip": {"p": 0.5},
-          "AdjustContrast": {"p": 0.5, "low": 0.7, "high": 1.3},
+          "AdjustContrast": {"p": 0.5, "low": 0.5, "high": 1.4},
+          "AdjustBrighness": {"p": 0.5, "low": -0.25, "high": 0.25},
           "GaussianBlur": {"p": 0.5, "sigma": [0.1, 1.5]},
           "RandomCropResize": {"crop_scales": [0.5, 1.0], "crop_ratios":[0.8, 1.25]}
         },
@@ -50,7 +51,9 @@
         "top_filter": 32,
         "3D": false,
         "in_channels": 1,
-        "MLP_head": [1024, 128]
+        "MLP_head": [512, 128],
+        "midchannels_factor": 1,
+        "p_dropout": 0.5
       },
       "train":{
         "model_path_to_load": null,
@@ -58,8 +61,8 @@
         "loss_fn_kwargs":{
           "tau": 0.1
         },
-        "n_epoch": 50,
-        "batch_size": 64,
+        "n_epoch": 25,
+        "batch_size": 40,
         "lr": 1e-3,
         "lr_scheduler": "ExponentialLR",
         "lr_scheduler_kwargs": {
@@ -78,7 +81,9 @@
         "3D": false,
         "in_channels": 1,
         "head_channel": [128, 32],
-        "bilinear": false
+        "bilinear": false,
+        "midchannels_factor": 1,
+        "p_dropout": 0.5
       },
       "train":{
         "model_path_to_load": null,
@@ -124,7 +129,9 @@
       "3D": false,
       "in_channels": 1,
       "out_channels": 1,
-      "bilinear": false
+      "bilinear": false,
+      "midchannels_factor": 1,
+      "p_dropout": 0.5
     },
     "train":{
       "model_path_to_load": null,

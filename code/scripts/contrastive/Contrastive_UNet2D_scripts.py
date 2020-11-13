@@ -126,7 +126,8 @@ def main(config_path):
     # Make Encoder architecture
     net_global = UNet_Encoder(depth=cfg['SSL']['global']['net']['depth'], top_filter=cfg['SSL']['global']['net']['top_filter'],
                               use_3D=cfg['SSL']['global']['net']['3D'], in_channels=cfg['SSL']['global']['net']['in_channels'],
-                              MLP_head=cfg['SSL']['global']['net']['MLP_head'])
+                              MLP_head=cfg['SSL']['global']['net']['MLP_head'], midchannels_factor=cfg['SSL']['global']['net']['midchannels_factor'],
+                              p_dropout=cfg['SSL']['global']['net']['p_dropout'])
     net_global.to(cfg['device'])
     logger.info(f"U-Net2D Encoder initialized with a depth of {cfg['SSL']['global']['net']['depth']}"
                 f" and a number of initial filter of {cfg['SSL']['global']['net']['top_filter']},")
@@ -191,7 +192,8 @@ def main(config_path):
         net_local = Partial_UNet(depth=cfg['SSL']['local']['net']['depth'], n_decoder=cfg['SSL']['local']['net']['n_decoder'],
                                  top_filter=cfg['SSL']['local']['net']['top_filter'], use_3D=cfg['SSL']['local']['net']['3D'],
                                  in_channels=cfg['SSL']['local']['net']['in_channels'], head_channel=cfg['SSL']['local']['net']['head_channel'],
-                                 bilinear=cfg['SSL']['local']['net']['bilinear'])
+                                 bilinear=cfg['SSL']['local']['net']['bilinear'], midchannels_factor=cfg['SSL']['local']['net']['midchannels_factor'],
+                                 p_dropout=cfg['SSL']['local']['net']['p_dropout'])
         net_local.to(cfg['device'])
         logger.info(f"Partial U-Net2D initialized with a depth of {cfg['SSL']['local']['net']['depth']}"
                     f" and a number of initial filter of {cfg['SSL']['local']['net']['top_filter']},")
@@ -287,7 +289,9 @@ def main(config_path):
             # Make U-Net architecture
             unet_sup = UNet(depth=cfg['Sup']['net']['depth'], top_filter=cfg['Sup']['net']['top_filter'],
                              use_3D=cfg['Sup']['net']['3D'], in_channels=cfg['Sup']['net']['in_channels'],
-                             out_channels=cfg['Sup']['net']['out_channels'], bilinear=cfg['Sup']['net']['bilinear'])
+                             out_channels=cfg['Sup']['net']['out_channels'], bilinear=cfg['Sup']['net']['bilinear'],
+                             midchannels_factor=cfg['Sup']['net']['midchannels_factor'],
+                             p_dropout=cfg['Sup']['net']['p_dropout'])
             unet_sup.to(cfg['device'])
             logger.info(f"U-Net2D initialized with a depth of {cfg['Sup']['net']['depth']}"
                         f" and a number of initial filter of {cfg['Sup']['net']['top_filter']},")

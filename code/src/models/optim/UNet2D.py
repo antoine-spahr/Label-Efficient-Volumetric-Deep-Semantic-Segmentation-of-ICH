@@ -77,7 +77,7 @@ class UNet2D:
             },
             'eval':{
                 'time': None,
-                'dice': None
+                'dice': {'all':None, 'positive':None}
             }
         }
 
@@ -271,10 +271,10 @@ class UNet2D:
 
     def segement_volume(self, vol, save_fn=None, window=None, input_size=(256, 256), return_pred=False):
         """
-        Segement each slice of the passed Nifti volumes and save the results as a Nifti volumes.
+        Segement each slice of the passed Nifti volume and save the results as a Nifti volume.
         ----------
         INPUT
-            |---- vol (nibabel.nifti1.Nifti1Pair) the nibabel volumes with metadata to segement.
+            |---- vol (nibabel.nifti1.Nifti1Pair) the nibabel volume with metadata to segement.
             |---- save_fn (str) where to save the segmentation.
             |---- window (tuple (center, width)) the winowing to apply to the ct-scan.
             |---- input_size (tuple (h, w)) the input size for the network.
@@ -288,6 +288,7 @@ class UNet2D:
             vol_data = window_ct(vol_data, win_center=window[0], win_width=window[1], out_range=(0,1))
         transform = tf.Compose(tf.Resize(H=input_size[0], W=input_size[1]), tf.ToTorchTensor())
         self.unet.eval()
+        self.unet.to(self.device)
         with torch.no_grad():
             for s in range(0, vol_data.shape[2], self.batch_size):
                 # get slice in good size and as tensor
