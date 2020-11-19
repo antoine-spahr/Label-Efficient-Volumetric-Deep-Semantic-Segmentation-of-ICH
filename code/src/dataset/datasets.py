@@ -471,7 +471,7 @@ class ImgMaskDataset(data.Dataset):
         OUTPUT
             |---- RSNA_Inpaint_dataset (torch.Dataset) the RSNA dataset for inpainting.
         """
-        super(RSNA_Inpaint_dataset, self).__init__()
+        super(ImgMaskDataset, self).__init__()
         self.data_df = data_df
         self.data_path = data_path
         self.window = window
@@ -500,6 +500,7 @@ class ImgMaskDataset(data.Dataset):
         OUTPUT
             |---- im (torch.tensor) the image with dimension (1 x H x W).
             |---- mask (torch.tensor) the mask with dimension (1 x H x W).
+            |---- idx (torch.tensor) the data index in the data_df.
         """
         # load dicom and recover the CT pixel values
         im = io.imread(os.path.join(self.data_path, self.data_df.iloc[idx].im_fn))
@@ -510,7 +511,7 @@ class ImgMaskDataset(data.Dataset):
         # transform image
         im, mask = self.transform(im, mask)
 
-        return im, mask
+        return im, mask, torch.tensor(idx)
 
 
 #%%

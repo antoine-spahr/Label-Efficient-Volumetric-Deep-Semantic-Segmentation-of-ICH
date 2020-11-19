@@ -10,10 +10,15 @@ TO DO :
 import os
 import json
 import logging
+import time
 import numpy as np
 import torch
 import torch.nn
+import torch.nn.functional as F
+import torch.optim as optim
 import skimage.io as io
+from skimage import img_as_ubyte
+from datetime import timedelta
 
 from src.models.optim.LossFunctions import DiscountedL1
 from src.utils.print_utils import print_progessbar
@@ -106,8 +111,8 @@ class SNPatchGAN:
         # make dataloader
         loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
         # make optimizers
-        optimizer_g = torch.optim.Adam(self.generator.parameters(), lr=self.lr_g, weight_decay=self.weight_decay)
-        optimizer_d = torch.optim.Adam(self.discriminator.parameters(), lr=self.lr_d, weight_decay=self.weight_decay)
+        optimizer_g = optim.Adam(self.generator.parameters(), lr=self.lr_g, weight_decay=self.weight_decay)
+        optimizer_d = optim.Adam(self.discriminator.parameters(), lr=self.lr_d, weight_decay=self.weight_decay)
         # make scheduler
         scheduler_g = self.lr_scheduler(optimizer_g, **self.lr_scheduler_kwargs)
         scheduler_d = self.lr_scheduler(optimizer_d, **self.lr_scheduler_kwargs)
@@ -138,7 +143,7 @@ class SNPatchGAN:
         for epoch in range(n_epoch_finished, self.n_epoch):
             self.generator.train()
             self.discriminator.train()
-            epoch_l1_loss, epoch_gan_loss_g, epoch_loss_d, epoch_loss_g = 0.0, 0.0, 0.0, 0.0
+            epoch_loss_l1, epoch_gan_loss_g, epoch_loss_d, epoch_loss_g = 0.0, 0.0, 0.0, 0.0
             epoch_start_time = time.time()
 
             for b, data in enumerate(loader):
@@ -159,7 +164,7 @@ class SNPatchGAN:
                 fake_repr = self.discriminator(fake_im2.detach(), mask)
                 real_repr = self.discriminator(im, mask)
                 # compute discriminator loss
-                loss_d = torch.mean(torch.max(0, 1 - real_repr)) + torch.mean(torch.max(0, 1 + fake_repr))
+                loss_d = torch.mean(F.relu(1 - real_repr)) + torch.mean(F.relu(1 + fake_repr))
                 # update discriminator's weights
                 loss_d.backward()
                 optimizer_d.step()
@@ -167,7 +172,7 @@ class SNPatchGAN:
                 ### TRAIN GENERATOR
                 optimizer_g.zero_grad()
                 # compute discounted L1 reconstruction loss
-                l1_loss = L1Loss(fake_im1, im, mask) + L1Loss(fake_im2, im, mask)
+                loss_l1 = L1Loss(fake_im1, im, mask) + L1Loss(fake_im2, im, mask)
                 # compute the GAN loss with new forward pass through the updated Discriminator
                 fake_repr = self.discriminator(fake_im2, mask)
                 loss_gan = - torch.mean(fake_repr)
@@ -179,7 +184,7 @@ class SNPatchGAN:
                 # sum losses
                 epoch_loss_d += loss_d.item()
                 epoch_loss_g += loss_g.item()
-                epoch_l1_loss += l1_loss.item()
+                epoch_loss_l1 += loss_l1.item()
                 epoch_gan_loss_g += loss_gan.item()
 
                 # print progress
@@ -189,17 +194,17 @@ class SNPatchGAN:
             # Validation on set of fixed images
             if valid_dataset:
                 save_path = valid_path if (epoch+1)%save_freq == 0 else None
-                valid_l1 = self.validate(valid_dataset, save_path=save_path, epoch=epoch)
+                valid_l1 = self.validate(valid_dataset, save_path=save_path, epoch=epoch+1)
 
             # print epoch summary
-            logger.info(f"| Epoch {epoch:03}/{self.n_epoch:03} | time {timedelta(seconds=int(time.time() - epoch_start_time))} "
-                        f"| L1 {epoch_l1_loss/n_batch:.5f} | GAN_G {epoch_gan_loss_g/n_batch:.5f} "
+            logger.info(f"| Epoch {epoch+1:03}/{self.n_epoch:03} | time {timedelta(seconds=int(time.time() - epoch_start_time))} "
+                        f"| L1 {epoch_loss_l1/n_batch:.5f} | GAN_G {epoch_gan_loss_g/n_batch:.5f} "
                         f"| LossG {epoch_loss_g/n_batch:.5f} <-> LossD {epoch_loss_d/n_batch:.5f} "
                         f"| Valid L1 Loss {valid_l1:.5f} "
                         f"| lr_g {scheduler_g.get_last_lr()[0]:.6f} | lr_d {scheduler_d.get_last_lr()[0]:.6f} |")
 
             # store epoch
-            epoch_loss_list.append([epoch+1, epoch_l1_loss/n_batch, epoch_gan_loss_g/n_batch, epoch_loss_g/n_batch, epoch_loss_d/n_batch, valid_l1])
+            epoch_loss_list.append([epoch+1, epoch_loss_l1/n_batch, epoch_gan_loss_g/n_batch, epoch_loss_g/n_batch, epoch_loss_d/n_batch, valid_l1])
 
             # update lr
             scheduler_d.step()
@@ -231,10 +236,10 @@ class SNPatchGAN:
         Validate the generator inpainting capabilities on a samll sample of data.
         ----------
         INPUT
-            |---- dataset (torch.utils.data.Dataset) dataset returning a small sample of fixed pairs (image, mask)
+            |---- dataset (torch.utils.data.Dataset) dataset returning a small sample of fixed pairs (image, mask, idx)
             |               on which to validate the GAN over training. It must return an image tensor of dimension
-            |               [N_samp, C, H, W] and a mask tensor of dimension [N_samp, 1, H, W]. If None, no validation is
-            |               performed during training.
+            |               [C, H, W], a mask tensor of dimension [1, H, W] and a tensor of index of dimension [1].
+            |               If None, no validation is performed during training.
             |---- save_path (str) path to directory where to save the inpaint results of the valida_data as .png. Each
             |               image is saved as save_path/valid_imY_epXXX.png where Y is the image index and XXX is the epoch.
             |---- epoch (int) the current epoch number.
@@ -245,15 +250,16 @@ class SNPatchGAN:
             # make loader
             valid_loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
             n_batch = len(valid_loader)
-            l1_loss_fn = DiscountedL1(gamma=self.gamma, reduction='mean', device=self.device)
+            l1_loss_fn = DiscountedL1(gamma=self.gammaL1, reduction='mean', device=self.device)
 
             self.generator.eval()
             # validate data by batch
             l1_loss = 0.0
             for b, data in enumerate(valid_loader):
-                im_v, mask_v = data
+                im_v, mask_v, idx = data
                 im_v = im_v.to(self.device).float()
                 mask_v = mask_v.to(self.device).float()
+                idx = idx.cpu().numpy()
 
                 # inpaint
                 im_inpaint, _ = self.generator(im_v, mask_v)
@@ -265,7 +271,7 @@ class SNPatchGAN:
                 if save_path:
                     for i in range(im_inpaint.shape[0]):
                         arr = im_inpaint[i].permute(1,2,0).squeeze().cpu().numpy()
-                        io.imsave(os.path.join(save_path, f'valid_im{i+1}_ep{epoch}.png'), arr)
+                        io.imsave(os.path.join(save_path, f'valid_im{idx[i]}_ep{epoch}.png'), img_as_ubyte(arr))
 
                 print_progessbar(b, n_batch, Name='Valid Batch', Size=40, erase=True)
 

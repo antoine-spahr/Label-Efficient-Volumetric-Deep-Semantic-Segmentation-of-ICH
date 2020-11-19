@@ -69,7 +69,6 @@ class Compose:
         """
         return Compose(*(self.transformations + other.transformations))
 
-
 class RandomZCrop:
     """
     Randomly crop the 3D image and mask along the z-dimension.
@@ -247,9 +246,11 @@ class Scale:
             if mask is not None:
                 mask = skimage.util.crop(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
         else:
-            image = skimage.util.pad(scipy.ndimage.zoom(image, scales, order=3), adjust_list)#, constant_values=image.min())
+            #image = skimage.util.pad(scipy.ndimage.zoom(image, scales, order=3), adjust_list)#, constant_values=image.min())
+            image = np.pad(scipy.ndimage.zoom(image, scales, order=3), adjust_list)
             if mask is not None:
-                mask = skimage.util.pad(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
+                #mask = skimage.util.pad(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
+                mask = np.pad(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
 
         if mask is not None:
             return image, mask

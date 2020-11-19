@@ -577,7 +577,7 @@ class PatchDiscriminator(nn.Module):
             |               kernel size will be used for all layers. If a list is passed, it must be of the same length
             |               as out_channels.
             |---- stride (int or list of int) the convolution stride. If a int is passed, the same stride is applied in
-            |               each layer. If a list, it must be of same size as out_channels.
+            |               each layer excpet the first one with sride=1. If a list, it must be of same size as out_channels.
             |---- bias (bool or list of bool) whether to include a bias term on convolution. If a bool is passed, bias is
             |               included in each layer. If a list, it must be of same size as out_channels.
             |---- activation (str or list of string) activation function to use. If a str is passed, all layer expect the
@@ -608,7 +608,7 @@ class PatchDiscriminator(nn.Module):
         if isinstance(stride, list):
             assert len(stride) == n_layer, f"Stride provided as list but does not match the number of layers. Given {len(stride)} ; required {n_layer}"
         else:
-            stride = [stride] * n_layer
+            stride = [1] + [stride] * (n_layer - 1)
         if isinstance(bias, list):
             assert len(bias) == n_layer, f"Bias provided as list but does not match the number of layers. Given {len(bias)} ; required {n_layer}"
         else:

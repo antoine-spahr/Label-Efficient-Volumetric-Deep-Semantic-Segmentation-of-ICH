@@ -40,7 +40,7 @@ def main(config_path):
     out_path = os.path.join(cfg.path.output, cfg.exp_name)
     os.makedirs(out_path, exist_ok=True)
     if cfg.train.validate_epoch:
-         os.makedirs(os.path.join(out_path, '/valid_results/'), exist_ok=True)
+         os.makedirs(os.path.join(out_path, 'valid_results/'), exist_ok=True)
 
     # initialize seed
     if cfg.seed != -1:
@@ -110,12 +110,14 @@ def main(config_path):
     gen_params = [f"--> {k} : {v}" for k, v in cfg.net.gen.items()]
     logger.info("Gated Generator Parameters \n\t" + "\n\t".join(gen_params))
     dis_params = [f"--> {k} : {v}" for k, v in cfg.net.dis.items()]
-    logger.info("Gated Generator Parameters \n\t" + "\n\t".join(dis_params))
+    logger.info("Gated Discriminator Parameters \n\t" + "\n\t".join(dis_params))
 
     #--------------------------------------------------------------------
     #                      Make Inpainting GAN model
     #--------------------------------------------------------------------
-    gan_model = SNPatchGAN(generator_net, discriminator_net, **cfg.train.model_param)
+    cfg.train.model_param.lr_scheduler = getattr(torch.optim.lr_scheduler, cfg.train.model_param.lr_scheduler) # convert scheduler name to scheduler class object
+    gan_model = SNPatchGAN(generator_net, discriminator_net, print_progress=cfg.print_progress,
+                           device=cfg.device,  **cfg.train.model_param)
     train_params = [f"--> {k} : {v}" for k, v in cfg.train.model_param.items()]
     logger.info("GAN Training Parameters \n\t" + "\n\t".join(train_params))
 
@@ -130,7 +132,7 @@ def main(config_path):
     #--------------------------------------------------------------------
     if cfg.train.model_param.n_epoch > 0:
         gan_model.train(train_dataset, checkpoint_path=os.path.join(out_path, 'Checkpoint.pt'),
-                        valid_dataset=valid_dataset, valid_path=os.path.join(out_path, '/valid_results/'),
+                        valid_dataset=valid_dataset, valid_path=os.path.join(out_path, 'valid_results/'),
                         save_freq=cfg.train.valid_save_freq)
 
     #--------------------------------------------------------------------
@@ -146,13 +148,15 @@ def main(config_path):
     logger.info("Outputs file saved at " + os.path.join(out_path, 'outputs.json'))
     # save config file
     cfg.device = str(cfg.device) # set device as string to be JSON serializable
+    cfg.net.gen.context_attention_kwargs.device = str(cfg.net.gen.context_attention_kwargs.device)
+    cfg.train.model_param.lr_scheduler = str(cfg.train.model_param.lr_scheduler)
     with open(os.path.join(out_path, 'config.json'), 'w') as fp:
         json.dump(cfg, fp)
     logger.info("Config file saved at " + os.path.join(out_path, 'config.json'))
 
     # delete any checkpoints
-    if os.path.exists(os.path.join(out_path, f'checkpoint.pt')):
-        os.remove(os.path.join(out_path, f'checkpoint.pt'))
+    if os.path.exists(os.path.join(out_path, f'Checkpoint.pt')):
+        os.remove(os.path.join(out_path, f'Checkpoint.pt'))
         logger.info('Checkpoint deleted.')
 
 def initialize_logger(logger_fn):

@@ -36,10 +36,10 @@
     },
     "mask":{
       "n_draw": [1, 4],
-      "vertex": [10, 25],
-      "brush_width": [10, 30],
+      "vertex": [10, 15],
+      "brush_width": [10, 15],
       "angle": [0, 6.28],
-      "length": [10, 40],
+      "length": [10, 30],
       "n_salt_pepper": [0, 10],
       "salt_peper_radius": [1, 3]
     }
