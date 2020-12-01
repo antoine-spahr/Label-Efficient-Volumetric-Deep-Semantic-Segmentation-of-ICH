@@ -426,8 +426,9 @@ class RSNA_Inpaint_dataset(data.Dataset):
             start_x, start_y = int(np.random.normal(w/2, w/8)), int(np.random.normal(h/2, h/8))
             #start_x, start_y = np.random.randint(low=0, high=w), np.random.randint(low=0, high=h)
 
+            beta = np.random.uniform(low=0, high=6.28)
             for i in range(n_vertex):
-                angle = np.random.uniform(low=self.angle[0], high=self.angle[1])
+                angle = beta + np.random.uniform(low=self.angle[0], high=self.angle[1])
                 length = np.random.randint(low=self.length[0], high=self.length[1])
                 if i % 2 == 0:
                     angle = np.pi + angle #2 * np.pi - angle # reverse mode
@@ -443,12 +444,6 @@ class RSNA_Inpaint_dataset(data.Dataset):
             start_x, start_y = np.random.randint(low=0, high=w), np.random.randint(low=0, high=h)
             r = np.random.randint(low=self.salt_peper_radius[0], high=self.salt_peper_radius[1])
             cv2.circle(mask, (start_x, start_y), r, 1.0, -1)
-
-        # if np.random.random() > 0.5:
-        #     mask = mask[:,::-1]
-        #
-        # if np.random.random() > 0.5:
-        #     mask = mask[::-1,:]
 
         return mask
 

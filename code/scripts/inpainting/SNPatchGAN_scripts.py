@@ -21,7 +21,7 @@ import pandas as pd
 
 from src.dataset.datasets import RSNA_Inpaint_dataset, ImgMaskDataset
 import src.dataset.transforms as tf
-from src.models.networks.InpaintingNetwork import GatedGenerator, PatchDiscriminator
+from src.models.networks.InpaintingNetwork import GatedGenerator, PatchDiscriminator, SAGatedGenerator
 from src.models.optim.SNPatchGAN import SNPatchGAN
 
 from src.utils.python_utils import AttrDict
@@ -103,8 +103,12 @@ def main(config_path):
     #--------------------------------------------------------------------
     #                           Make Networks
     #--------------------------------------------------------------------
-    cfg.net.gen.context_attention_kwargs['device'] = cfg.device # add device to kwargs of contextual attention module
-    generator_net = GatedGenerator(**cfg.net.gen)
+    if 'context_attention' in cfg.net.gen:
+        cfg.net.gen.context_attention_kwargs['device'] = cfg.device # add device to kwargs of contextual attention module
+        generator_net = GatedGenerator(**cfg.net.gen)
+    elif 'self_attention' in cfg.net.gen:
+        generator_net = SAGatedGenerator(**cfg.net.gen)
+
     discriminator_net = PatchDiscriminator(**cfg.net.dis)
 
     gen_params = [f"--> {k} : {v}" for k, v in cfg.net.gen.items()]
@@ -148,7 +152,8 @@ def main(config_path):
     logger.info("Outputs file saved at " + os.path.join(out_path, 'outputs.json'))
     # save config file
     cfg.device = str(cfg.device) # set device as string to be JSON serializable
-    cfg.net.gen.context_attention_kwargs.device = str(cfg.net.gen.context_attention_kwargs.device)
+    if 'context_attention' in cfg.net.gen:
+        cfg.net.gen.context_attention_kwargs.device = str(cfg.net.gen.context_attention_kwargs.device)
     cfg.train.model_param.lr_scheduler = str(cfg.train.model_param.lr_scheduler)
     with open(os.path.join(out_path, 'config.json'), 'w') as fp:
         json.dump(cfg, fp)

@@ -74,7 +74,8 @@
       "activation": "relu",
       "norm": true,
       "padding_mode": "reflect",
-      "sn": true
+      "sn": true,
+      "self_attention": true
     }
   },
   "train": {

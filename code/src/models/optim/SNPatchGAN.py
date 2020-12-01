@@ -111,8 +111,8 @@ class SNPatchGAN:
         # make dataloader
         loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
         # make optimizers
-        optimizer_g = optim.Adam(self.generator.parameters(), lr=self.lr_g, weight_decay=self.weight_decay)
-        optimizer_d = optim.Adam(self.discriminator.parameters(), lr=self.lr_d, weight_decay=self.weight_decay)
+        optimizer_g = optim.Adam(self.generator.parameters(), lr=self.lr_g, weight_decay=self.weight_decay, betas=(0.5, 0.999))
+        optimizer_d = optim.Adam(self.discriminator.parameters(), lr=self.lr_d, weight_decay=self.weight_decay, betas=(0.5, 0.999))
         # make scheduler
         scheduler_g = self.lr_scheduler(optimizer_g, **self.lr_scheduler_kwargs)
         scheduler_d = self.lr_scheduler(optimizer_d, **self.lr_scheduler_kwargs)
@@ -143,7 +143,7 @@ class SNPatchGAN:
         for epoch in range(n_epoch_finished, self.n_epoch):
             self.generator.train()
             self.discriminator.train()
-            epoch_loss_l1, epoch_gan_loss_g, epoch_loss_d, epoch_loss_g = 0.0, 0.0, 0.0, 0.0
+            epoch_loss_l1, epoch_gan_loss_g, epoch_loss_d, epoch_loss_g, epoch_loss_d_real, epoch_loss_d_fake = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
             epoch_start_time = time.time()
 
             for b, data in enumerate(loader):
@@ -164,10 +164,15 @@ class SNPatchGAN:
                 fake_repr = self.discriminator(fake_im2.detach(), mask)
                 real_repr = self.discriminator(im, mask)
                 # compute discriminator loss
-                loss_d = torch.mean(F.relu(1 - real_repr)) + torch.mean(F.relu(1 + fake_repr))
+                loss_d_real, loss_d_fake = torch.mean(F.relu(1.0 - real_repr)), torch.mean(F.relu(1.0 + fake_repr))
+                loss_d = loss_d_real + loss_d_fake
                 # update discriminator's weights
                 loss_d.backward()
                 optimizer_d.step()
+
+                epoch_loss_d += loss_d.item()
+                epoch_loss_d_real += loss_d_real.item()
+                epoch_loss_d_fake += loss_d_fake.item()
 
                 ### TRAIN GENERATOR
                 optimizer_g.zero_grad()
@@ -175,21 +180,25 @@ class SNPatchGAN:
                 loss_l1 = L1Loss(fake_im1, im, mask) + L1Loss(fake_im2, im, mask)
                 # compute the GAN loss with new forward pass through the updated Discriminator
                 fake_repr = self.discriminator(fake_im2, mask)
-                loss_gan = - torch.mean(fake_repr)
+                loss_gan = -torch.mean(fake_repr)
                 loss_g = self.lambda_L1 * loss_l1 + self.lambda_gan * loss_gan
                 # update generator's weights
                 loss_g.backward()
                 optimizer_g.step()
 
                 # sum losses
-                epoch_loss_d += loss_d.item()
                 epoch_loss_g += loss_g.item()
                 epoch_loss_l1 += loss_l1.item()
                 epoch_gan_loss_g += loss_gan.item()
 
+                # print batch summary --> state of one GAN iteration
+                logger.info(f"| Epoch {epoch+1:03}/{self.n_epoch:03} | Batch {b+1:04}/{n_batch:04} "
+                            f"| LossG {loss_g.item():.6f} -> L1 {loss_l1.item():.5f} +  GAN_G {loss_gan.item():.6f} "
+                            f"| LossD {loss_d.item():.6f} -> L_real {loss_d_real.item():.6f} + L_fake {loss_d_fake.item():.6f} ")
+            
                 # print progress
-                if self.print_progress:
-                    print_progessbar(b, n_batch, Name='Training Batch', Size=40, erase=True)
+                # if self.print_progress:
+                #     print_progessbar(b, n_batch, Name='Training Batch', Size=40, erase=True)
 
             # Validation on set of fixed images
             if valid_dataset:
@@ -197,11 +206,13 @@ class SNPatchGAN:
                 valid_l1 = self.validate(valid_dataset, save_path=save_path, epoch=epoch+1)
 
             # print epoch summary
-            logger.info(f"| Epoch {epoch+1:03}/{self.n_epoch:03} | time {timedelta(seconds=int(time.time() - epoch_start_time))} "
-                        f"| L1 {epoch_loss_l1/n_batch:.5f} | GAN_G {epoch_gan_loss_g/n_batch:.5f} "
-                        f"| LossG {epoch_loss_g/n_batch:.5f} <-> LossD {epoch_loss_d/n_batch:.5f} "
-                        f"| Valid L1 Loss {valid_l1:.5f} "
-                        f"| lr_g {scheduler_g.get_last_lr()[0]:.6f} | lr_d {scheduler_d.get_last_lr()[0]:.6f} |")
+            logger.info('|' + '-'*30 + f" Summary Epoch {epoch+1:03}/{self.n_epoch:03} " + '-'*30)
+            logger.info(f"| Time {timedelta(seconds=int(time.time() - epoch_start_time))}")
+            logger.info(f"| LossG {epoch_loss_g/n_batch:.6f} -> L1 {epoch_loss_l1/n_batch:.6f} + GAN_G {epoch_gan_loss_g/n_batch:.6f}")
+            logger.info(f"| LossD {epoch_loss_d/n_batch:.6f} -> L_real {epoch_loss_d_real/n_batch:.6f} + L_fake {epoch_loss_d_fake/n_batch:.6f}")
+            logger.info(f"| Valid L1 Loss {valid_l1:.6f}")
+            logger.info(f"| lr_g {scheduler_g.get_last_lr()[0]:.6f} | lr_d {scheduler_d.get_last_lr()[0]:.6f} |")
+            logger.info('|' + '-'*83)
 
             # store epoch
             epoch_loss_list.append([epoch+1, epoch_loss_l1/n_batch, epoch_gan_loss_g/n_batch, epoch_loss_g/n_batch, epoch_loss_d/n_batch, valid_l1])
@@ -262,9 +273,10 @@ class SNPatchGAN:
                 idx = idx.cpu().numpy()
 
                 # inpaint
-                im_inpaint, _ = self.generator(im_v, mask_v)
+                im_inpaint, coarse = self.generator(im_v, mask_v)
                 # recover non-masked regions
                 im_inpaint = im_v * (1 - mask_v) + im_inpaint * mask_v
+                coarse = im_v * (1 - mask_v) + coarse * mask_v
                 # compute L1 loss
                 l1_loss += l1_loss_fn(im_inpaint, im_v, mask_v).item()
                 # save results
@@ -272,6 +284,9 @@ class SNPatchGAN:
                     for i in range(im_inpaint.shape[0]):
                         arr = im_inpaint[i].permute(1,2,0).squeeze().cpu().numpy()
                         io.imsave(os.path.join(save_path, f'valid_im{idx[i]}_ep{epoch}.png'), img_as_ubyte(arr))
+
+                        arr = coarse[i].permute(1,2,0).squeeze().cpu().numpy()
+                        io.imsave(os.path.join(save_path, f'valid_im{idx[i]}_coarse_ep{epoch}.png'), img_as_ubyte(arr))
 
                 print_progessbar(b, n_batch, Name='Valid Batch', Size=40, erase=True)
 

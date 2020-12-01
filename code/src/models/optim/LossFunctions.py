@@ -373,7 +373,7 @@ class DiscountedL1(nn.Module):
         """
         #assert rec.shape == im.shape, f'Shape mismatch between image and reconstruction: {rec.shape} vs {im.shape}'
         l1_loss = self.L1(rec, im)
-        weight = self.gamma.view(1,1,1,1) ** self.get_dist_mask(mask)
+        weight = (self.gamma.view(1,1,1,1) ** self.get_dist_mask(mask)) * mask # consider only pixel on mask and give more inportance of one close to border
         l1_loss = l1_loss * weight
         # Apply the reduction
         if self.reduction == 'mean':

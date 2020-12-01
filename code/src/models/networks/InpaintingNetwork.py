@@ -6,12 +6,10 @@ date : 05.11.2020
 ----------
 
 TO DO :
-- check and adapte Contextual Attention layer.
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 class Conv2dLayer(nn.Module):
     """
@@ -428,6 +426,46 @@ class ContextualAttention(nn.Module):
         sim = torch.cat(sim, dim=0).contiguous().view(in_fg_size)  # back to the mini-batch
         return sim
 
+class SelfAttention(nn.Module):
+    """
+    Self-Attention Module proposed by Zhang et al. 2018 in Self-Attention Generative Adversarial Networks. The module is
+    inspired from https://github.com/nihalsid/deepfillv2-pylightning/tree/4b51cbcefaa9d497f5cb2a17d1bd776e4ab2446d where
+    the convolution v is removed.
+    """
+    def __init__(self, in_channels):
+        """
+        Build a Self-Attention Module.
+        ----------
+        INPUT
+            |---- in_channels (int) the number of channels of the input feature map.
+        OUTPUT
+            |---- SelfAttention (nn.Module) the Self-Attention modul.
+        """
+        super(SelfAttention, self).__init__()
+        self.conv_f = nn.Conv2d(in_channels=in_channels, out_channels=in_channels//8, kernel_size=1)
+        self.conv_g = nn.Conv2d(in_channels=in_channels, out_channels=in_channels//8, kernel_size=1)
+        self.conv_h = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        """
+        Forward pass of the self-attention module.
+        INPUT
+            |---- x (torch.tensor) the input with dimension [B, in_Channel, H, W].
+        OUTPUT
+            |---- out (torch.tensor) the output with dimension [B, in_Channel, H, W].
+        """
+        B, C, H, W = x.size()
+        proj_f = self.conv_f(x).view(B, -1, H*W).permute(0, 2, 1)
+        proj_g = self.conv_g(x).view(B, -1, H*W)
+        attention = self.softmax(torch.bmm(proj_f, proj_g))
+        proj_v = self.conv_h(x).view(B, -1, H*W)
+
+        out = torch.bmm(proj_v, attention.permute(0, 2, 1)).view(B, C, H, W)
+        out = self.gamma * out + x
+        return out
+
 class GatedGenerator(nn.Module):
     """
     Define a gated generator as presented in Yu et al. 2018 (Generative Inpainting Inpainting with Contextual Attention)
@@ -480,7 +518,7 @@ class GatedGenerator(nn.Module):
             UpsampleGatedConv2d(2*lat_channels, lat_channels, 3, stride=1, dilation=1, padding=1, padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm,
                                 scale_factor=2, upsampling_mode=upsample_mode),
             GatedConv2d(lat_channels, lat_channels//2, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
-            GatedConv2d(lat_channels//2, out_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation='tanh',     bias=bias, batch_norm=False)
+            GatedConv2d(lat_channels//2, out_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation='sigmoid',     bias=bias, batch_norm=False)
         )
         # Encoder of refinement
         self.refine_enc = nn.Sequential(
@@ -520,7 +558,7 @@ class GatedGenerator(nn.Module):
             UpsampleGatedConv2d(2*lat_channels, lat_channels, 3, stride=1, dilation=1, padding=1, padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm,
                                 scale_factor=2, upsampling_mode=upsample_mode),
             GatedConv2d(lat_channels, lat_channels//2, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
-            GatedConv2d(lat_channels//2, out_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation='tanh',     bias=bias, batch_norm=False)
+            GatedConv2d(lat_channels//2, out_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation='sigmoid',     bias=bias, batch_norm=False)
         )
 
     def forward(self, img, mask):
@@ -540,9 +578,9 @@ class GatedGenerator(nn.Module):
         # stage 1 - Coarse
         input = torch.cat([masked_img, mask], dim=1)
         coarse_inpaint = self.coarse(input)
-        coarse_inpaint = coarse_inpaint * mask + masked_img # keep inpaint only on region to inpaint
+        coarse_inpaint_corr = coarse_inpaint * mask + masked_img # keep inpaint only on region to inpaint
         # stage 2 - Refinement
-        input_2 = torch.cat([coarse_inpaint, mask], dim=1)
+        input_2 = torch.cat([coarse_inpaint_corr, mask], dim=1)
         x = self.refine_enc(input_2)
 
         if self.refine_attention_enc is not None:
@@ -553,7 +591,7 @@ class GatedGenerator(nn.Module):
             x = torch.cat([x, x_context], dim=1)
 
         fine_inpaint = self.refine_dec(x)
-        fine_inpaint = fine_inpaint * mask + masked_img # keep inpaint only on region to inpaint
+        #fine_inpaint = fine_inpaint * mask + masked_img # keep inpaint only on region to inpaint
         # return inpainted image
         if self.return_coarse:
             return fine_inpaint, coarse_inpaint
@@ -562,10 +600,11 @@ class GatedGenerator(nn.Module):
 
 class PatchDiscriminator(nn.Module):
     """
-    Define a Patch Discriminator proposed in Yu et al. (Free-Form Image Inpainting with Gated Convolution) for image inpainting.
+    Define a Patch Discriminator proposed in Yu et al. (Free-Form Image Inpainting with Gated Convolution) for image
+    inpainting. with a possible Self-attention layer from Zhang et al 2018.
     """
     def __init__(self, in_channels=2, out_channels=[64, 128, 256, 256, 256, 256], kernel_size=5, stride=2, bias=True,
-                 activation='relu', norm=True, padding_mode='zeros', sn=True):
+                 activation='relu', norm=True, padding_mode='zeros', sn=True, self_attention=True):
         """
         Build a PatchDiscriminator.
         ----------
@@ -591,6 +630,7 @@ class PatchDiscriminator(nn.Module):
             |---- sn (bool or list of bool) whether to apply Spectral Normalization to the convolution layers. If a bool
             |               is passed all layers have/have not the Spectral Normalization. If a list, it must be of same
             |               size as out_channels.
+            |---- self_attention (bool) whether to add a self-attention layer before the last convolution
         OUTPUT
             |---- PatchDiscriminator (nn.Module) the patch discriminator.
         """
@@ -632,14 +672,17 @@ class PatchDiscriminator(nn.Module):
             self.layer_list.append(Conv2dLayer(in_channels[i], out_channels[i], kernel_size[i], stride=stride[i],
                                                padding=padding[i], bias=bias[i], padding_mode=padding_mode[i],
                                                activation=activation[i], batch_norm=norm[i], sn=sn[i]))
+            if self_attention and i == (n_layer - 2):
+                self.layer_list.append(SelfAttention(in_channels=out_channels[i]))
+                self.layer_list.append(nn.ReLU())
 
     def forward(self, img, mask):
         """
         Forward pass of the patch discriminator.
         ----------
         INPUT
-            |---- img (torch.tensor) the image to inpaint with dimension (Batch x In-Channels-1 x H x W)
-            |---- mask (torch.tensor) the mask of region to inpaint. Region inpainted must be sepcified by 1 and region
+            |---- img (torch.tensor) the image inpainted or not with dimension (Batch x In-Channels-1 x H x W)
+            |---- mask (torch.tensor) the mask of region inpainted. Region inpainted must be sepcified by 1 and region
             |               kept untouched must be 0. The mask should have dimension (Batch x 1 x H x W).
         OUTPUT
             |---- x (torch.tensor) the output feature map with dimension (Batch x Out-Channels x H' x W').
@@ -651,29 +694,131 @@ class PatchDiscriminator(nn.Module):
             x = layer(x)
         return x
 
+class SAGatedGenerator(nn.Module):
+    """
+    Define a self-attention gated generator as presented in Yu et al. 2018 (Generative Inpainting Inpainting with Contextual Attention)
+    and Yu et al. 2019 (Free Form Image Inpainting with Gated Convolution) but with the self-attention module of Zhang et
+    al. 2018 instead of the contextual attention module.
+    """
+    def __init__(self, in_channels=2, out_channels=1, lat_channels=32, activation='relu', norm=True, padding_mode='reflect',
+                 bias=True, upsample_mode='nearest', self_attention=True, return_coarse=True):
+        """
+        Build a Self-Attention Gated Generator network.
+        ----------
+        INPUT
+            |---- in_channels (int) the number of input channels (usually 2 for grayscale and 4 for RGB).
+            |---- out_channels (int) the number of output channels (usually 1 for grayscale and 3 for RGB).
+            |---- lat_channels (int) the number of channels in the first convolution. The number of channels is then
+            |               doubled twice at each down sampling and divided by 2 every upsampling.
+            |---- activation (str) the activation to use. (possible values : 'relu', 'lrelu', 'prelu', 'selu', 'sigmoid',
+            |               'tanh', 'none'). Note that the final activation is a TanH.
+            |---- norm (bool) whether to use Batch normalization layer in gated convolution. The first and last convolution
+            |               of each Encoder-Decoder does not have BatchNorm layers.
+            |---- padding_mode (str) the padding strategy to use. (see pytorch Conv2d doc for list of possible padding modes.)
+            |---- bias (bool) whether to include a bias term in the gated convolutions.
+            |---- upsample_mode (str) the interpolation strategy in upsampling layers. (see pytorch nn.Upsample doc for
+            |               list of possible padding modes.)
+            |---- self_attention (bool) whether to include the self attention module before refinement upsampling.
+            |---- return_coarse (bool) whether to return the coarse inpainting results.
+        OUTPUT
+            |---- GatedGenerator (nn.Module) the generator.
+        """
+        super(SAGatedGenerator, self).__init__()
+        self.return_coarse = return_coarse
+        # Initial coarse Encoder-Decoder
+        self.coarse = nn.Sequential(
+            GatedConv2d(in_channels,    lat_channels,   5, stride=1, dilation=1,  padding=2,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=False),
+            GatedConv2d(lat_channels,   2*lat_channels, 3, stride=2, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(2*lat_channels, 2*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(2*lat_channels, 4*lat_channels, 3, stride=2, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=2,  padding=2,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=4,  padding=4,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=8,  padding=8,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=16, padding=16, padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            UpsampleGatedConv2d(4*lat_channels, 2*lat_channels, 3, stride=1, dilation=1, padding=1, padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm,
+                                scale_factor=2, upsampling_mode=upsample_mode),
+            GatedConv2d(2*lat_channels, 2*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            UpsampleGatedConv2d(2*lat_channels, lat_channels, 3, stride=1, dilation=1, padding=1, padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm,
+                                scale_factor=2, upsampling_mode=upsample_mode),
+            GatedConv2d(lat_channels, lat_channels//2, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(lat_channels//2, out_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation='sigmoid',     bias=bias, batch_norm=False)
+        )
+        # Encoder of refinement
+        self.refine_enc = nn.Sequential(
+            GatedConv2d(in_channels,    lat_channels,   5, stride=1, dilation=1,  padding=2,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=False),
+            GatedConv2d(lat_channels,   2*lat_channels, 3, stride=2, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(2*lat_channels, 2*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(2*lat_channels, 4*lat_channels, 3, stride=2, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=2,  padding=2,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=4,  padding=4,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=8,  padding=8,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=16, padding=16, padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm)
+        )
 
+        self.refine_attention = nn.Sequential(SelfAttention(4*lat_channels), nn.ReLU()) if self_attention else None
+
+        self.refine_dec = nn.Sequential(
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(4*lat_channels, 4*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            UpsampleGatedConv2d(4*lat_channels, 2*lat_channels, 3, stride=1, dilation=1, padding=1, padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm,
+                                scale_factor=2, upsampling_mode=upsample_mode),
+            GatedConv2d(2*lat_channels, 2*lat_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            UpsampleGatedConv2d(2*lat_channels, lat_channels, 3, stride=1, dilation=1, padding=1, padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm,
+                                scale_factor=2, upsampling_mode=upsample_mode),
+            GatedConv2d(lat_channels, lat_channels//2, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation=activation, bias=bias, batch_norm=norm),
+            GatedConv2d(lat_channels//2, out_channels, 3, stride=1, dilation=1,  padding=1,  padding_mode=padding_mode, activation='sigmoid',     bias=bias, batch_norm=False)
+        )
+
+    def forward(self, img, mask):
+        """
+        Inpaint the passed image on area specified my the mask.
+        ----------
+        INPUT
+            |---- img (torch.tensor) the image to inpaint with dimension (Batch x In-Channels-1 x H x W)
+            |---- mask (torch.tensor) the mask of region to inpaint. Region to inpaint must be sepcified by 1 and region
+            |               kept untouched must be 0. The mask should have dimension (Batch x 1 x H x W).
+        OUTPUT
+            |---- fine_inpaint (torch.tensor) the fine inpainted image with dimension (Batch x In-Channels x H x W).
+            |---- (coarse_inpaint) (torch.tensor) the intermediate coarse inpaint with dimension (Batch x In-Channels x H x W).
+        """
+        masked_img = img * (1 - mask) # mask = 1 on region to remove
+
+        # stage 1 - Coarse
+        input = torch.cat([masked_img, mask], dim=1)
+        coarse_inpaint = self.coarse(input)
+        coarse_inpaint_corr = coarse_inpaint * mask + masked_img # keep inpaint only on region to inpaint
+
+        # stage 2 - Refinement
+        input_2 = torch.cat([coarse_inpaint_corr, mask], dim=1)
+        x = self.refine_enc(input_2)
+        # self-attention
+        if self.refine_attention is not None:
+            x = self.refine_attention(x)
+        # decoding
+        fine_inpaint = self.refine_dec(x)
+        # return inpainted image
+        if self.return_coarse:
+            return fine_inpaint, coarse_inpaint
+        else:
+            return fine_inpaint
 
 # %%
 # import torchsummary
 # import time
 #
-# discr = PatchDiscriminator(2, out_channels=[64, 128, 256, 256, 256, 256], kernel_size=5, stride=2, bias=True,
-#                            activation='relu', norm=True, padding_mode='zeros', sn=False)
+# discr = SAPatchDiscriminator(2, out_channels=[64, 128, 256, 256, 256, 256], kernel_size=5, stride=2, bias=True,
+#                            activation='relu', norm=True, padding_mode='zeros', sn=True, self_attention=False)
+#
+# torchsummary.summary(discr, (2,256,256), batch_size=-1)
 #
 # gen = GatedGenerator(2, out_channels=1, lat_channels=32, activation='relu', norm=True, padding_mode='reflect', bias=True,
 #                      upsample_mode='nearest', context_attention=True, return_coarse=True,
 #                      context_attention_kwargs=dict(kernel_size=3, patch_stride=1, compression_rate=2, softmax_scale=10,
 #                                                    fuse=False, fuse_kernel=3, device='cpu'))
-# sum(p.numel() for p in gen.parameters() if p.requires_grad)
-#
-#
-# ctx = ContextualAttention(kernel_size=3, patch_stride=2, compression_rate=2, softmax_scale=10,
-#                           fuse=True, fuse_kernel=3, device='cpu')
-#
-# t1 = time.time()
-# x = ctx(torch.rand(4, 128, 64, 64), torch.rand(4, 128, 64, 64), torch.ones(4, 1, 64, 64))
-# print(time.time() - t1)
-#
-# x = gen(torch.rand(4, 2, 256, 256))
-
-#
+# sum(p.numel() for p in discr.parameters() if p.requires_grad)
