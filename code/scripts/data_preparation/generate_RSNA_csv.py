@@ -41,6 +41,8 @@ def main(csv_info_fn, output_fn):
     df['filename'] = 'ID_' + df.ID + '.dcm'
     # rename any into Hemorrhage
     df.rename(columns={'any':'Hemorrhage'}, inplace=True)
+    # remove corrupted file ID_6431af929.dcm
+    df.drop(df[df.filename == 'stage_2_train/ID_6431af929.dcm'].index, inplace=True)
     # save csv
     save_path = output_fn if output_fn else '/'.join(csv_info_fn.split('/')[:-1]) + '/slice_info.csv'
     df.to_csv(save_path)
