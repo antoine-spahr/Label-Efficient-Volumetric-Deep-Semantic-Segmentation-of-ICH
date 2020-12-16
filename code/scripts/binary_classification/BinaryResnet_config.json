@@ -1,0 +1,53 @@
+{
+  "exp_name": "BinaryClassification_ResNet50_15-12",
+  "path":{
+    "data":"../../../data/RSNA/",
+    "output": "../../../outputs/"
+  },
+  "device": "cuda",
+  "multi_gpu_id": [0,1],
+  "n_thread": 0,
+  "seed": 42,
+  "print_progress": true,
+  "data":{
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256
+  },
+  "dataset":{
+    "n_data_0": 1000,
+    "n_data_1": 1000,
+    "frac_eval": 0.1,
+    "augmentation":{
+      "train":{
+        "Translate": {"low": -0.1, "high": 0.1},
+        "Rotate": {"low": -10, "high": 10},
+        "Scale": {"low": 0.9, "high": 1.1},
+        "HFlip": {"p": 0.5}
+      },
+      "eval":{}
+    }
+  },
+  "net":{
+    "resnet": "ResNet50",
+    "num_classes": 2,
+    "input_channels": 1
+  },
+  "train":{
+    "model_path_to_load": null,
+    "model_param": {
+      "loss_fn": "CrossEntropyLoss",
+      "loss_fn_kwargs":{
+        "reduction": "mean"
+      },
+      "n_epoch": 5,
+      "batch_size": 64,
+      "lr": 5e-4,
+      "lr_scheduler": "ExponentialLR",
+      "lr_scheduler_kwargs": {
+        "gamma": 0.95
+      },
+      "weight_decay": 1e-6,
+      "num_workers": 16}
+  }
+}

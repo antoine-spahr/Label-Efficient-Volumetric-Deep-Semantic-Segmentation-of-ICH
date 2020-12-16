@@ -256,7 +256,7 @@ class RSNA_dataset(data.Dataset):
             |---- output_size (int) the dimension of the output (H = W).
             |---- mode (str) define how to load the RSNA dataset. 'standard': return an image with its label.
             |           'context_restoration': return the image and the corruped image. 'contrastive': return two heavilly
-            |           augmented version of the input image.
+            |           augmented version of the input image. 'binary_classification': return image and binary label (ICH vs No-ICH).
             |---- n_swap (int) the number of swap to use in the context_restoration mode.
             |---- swap_h (int) the height of the swapped patch in the context_restoration mode.
             |---- swap_w (int) the width of the swapped patch in the context_restoration mode.
@@ -268,13 +268,13 @@ class RSNA_dataset(data.Dataset):
         """
         super(RSNA_dataset, self).__init__()
         self.data_df = data_df
+        self.n_sample = len(data_df)
         self.data_path = data_path
         self.window = window
-        assert mode in ['standard', 'context_restoration', 'contrastive'], f"Invalid mode. Must be one of 'standard', 'context_restoration', 'contrastive'. Given : {mode}"
+        assert mode in ['standard', 'context_restoration', 'contrastive', 'binary_classification'], f"Invalid mode. Must be one of 'standard', 'context_restoration', 'contrastive', 'binary_classification'. Given : {mode}"
         self.mode = mode
 
-        self.transform = tf.Compose(*augmentation_transform,
-                                    tf.Resize(H=output_size, W=output_size))#,
+        self.transform = tf.Compose(tf.Resize(H=output_size, W=output_size), *augmentation_transform)#,
                                     #tf.ToTorchTensor())
         self.toTensor = tf.ToTorchTensor()
         if mode == 'context_restoration':
@@ -291,7 +291,7 @@ class RSNA_dataset(data.Dataset):
         OUTPUT
             |---- N (int) the number of samples in the dataset.
         """
-        return len(self.data_df)
+        return self.n_sample
 
     def __getitem__(self, idx):
         """
@@ -312,8 +312,6 @@ class RSNA_dataset(data.Dataset):
             im = window_ct(im, win_center=self.window[0], win_width=self.window[1], out_range=(0,1))
 
         if self.mode == 'standard':
-            # load label
-            #lab = self.data_df.iloc[idx].Hemorrhage
             # transform image
             im = self.transform(im)
             return self.toTensor(im), torch.tensor(idx) #torch.tensor(lab), torch.tensor(idx)
@@ -328,6 +326,10 @@ class RSNA_dataset(data.Dataset):
             im1 = self.contrastive_transform(self.transform(im))
             im2 = self.contrastive_transform(self.transform(im))
             return self.toTensor(im1), self.toTensor(im2), torch.tensor(idx)
+        elif self.mode == 'binary_classification':
+            im = self.transform(im)
+            label = self.data_df.iloc[idx].Hemorrhage
+            return self.toTensor(im), torch.tensor(label), torch.tensor(idx)
 
 class RSNA_Inpaint_dataset(data.Dataset):
     """

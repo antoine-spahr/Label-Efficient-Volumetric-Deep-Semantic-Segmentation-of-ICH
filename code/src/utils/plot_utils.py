@@ -10,7 +10,7 @@ TO DO :
 """
 import matplotlib.pyplot as plt
 import matplotlib
-import pyvista as pv
+#import pyvista as pv
 import numpy as np
 import skimage.io as io
 import skimage

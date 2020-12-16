@@ -8,7 +8,6 @@ date : 01.12.2020
 To Do:
     -
 """
-
 import os
 import logging
 import warnings
@@ -27,9 +26,11 @@ class InpaintAnomalyDetector:
     """
     Define an anomaly detector based on multiple inpainting of each pixels.
     """
-    def __init__(self, inpaint_net, grid_hole=(32,32), grid_step=1, dilation_radius=3, n_iter=10,
+    def __init__(self, inpaint_net, grid_hole=(32,32), grid_step=1, inpainting_dilation_radius=(3,4),
+                 cleaning_closing_radius =1, cleaning_opening_radius=1, n_iter=10,
                  alpha01=0.0, alpha02=1.0, alpha1=1.0, alpha2=1.5, use_wasserstein=False,
-                 grid_anomaly_inpaint=(128,128), shuffle_AD_mask_loader=True, device='cuda', batch_size=8):
+                 grid_anomaly_inpaint=((128,128), (256,256)), shuffle_AD_mask_loader=True,
+                 early_stop=True, tol=25, device='cuda', batch_size=8):
         """
         Build a anomaly detector based on inpainting.
         ----------
@@ -40,24 +41,26 @@ class InpaintAnomalyDetector:
             |---- grid_hole (2-tuple of int (h, w)) the dimension of the hole of each grid element for inpainting.
             |---- grid_step (int) the step for sliding the grid over the image to obtained different mask. A larger step
             |               will reduce the number of grid mask generated and thus reduce the computation time.
-            |---- dilation_radius (int) the radius of the disk structuring element for dilation of the anomaly mask prior
-            |               of correction inpainting.
+            |---- inpainting_dilation_radius (2-tuple) the radius of the disk structuring element for dilation of the anomaly mask prior
+            |               of correction inpainting. The first element of the tuple represente the value to use in the initialization phase
+            |               and the second one for the iterative phase.
+            |---- cleaning_closing_radius (int) the radius of the disk structuring element for the closing of the new mask in the iterative process.
+            |---- cleaning_opening_radius (int) the radius of the disk structuring element for the opening of the new mask in the iterative process.
             |---- n_iter (int) the number of iteration of mask cleaning to perform.
-            |---- alpha01 (float) fraction of IQR to take to define the low hysteresis threshold in the initialization
-            |               phase. The threshold is defined as t_low = q75(D0) + alpha01*IQR(D0).
-            |---- alpha01 (float) fraction of IQR to take to define the high hysteresis threshold in the initialization
-            |               phase. The threshold is defined as t_high = q75(D0) + alpha02*IQR(D0).
-            |---- alpha01 (float) fraction of IQR to take to define the low hysteresis threshold in the iterative phase.
-            |               The threshold is defined as t_low = q75(Di) + alpha1*IQR(Di).
-            |---- alpha01 (float) fraction of IQR to take to define the high hysteresis threshold in the iterative phase.
-            |               The threshold is defined as t_high= q75(Di) + alpha2*IQR(Di).
+            |---- alpha01 (float) fraction of IQR to take to define the low hysteresis threshold in the initialization phase. The threshold is defined as t_low = q75(D0) + alpha01*IQR(D0).
+            |---- alpha01 (float) fraction of IQR to take to define the high hysteresis threshold in the initialization phase. The threshold is defined as t_high = q75(D0) + alpha02*IQR(D0).
+            |---- alpha01 (float) fraction of IQR to take to define the low hysteresis threshold in the iterative phase. The threshold is defined as t_low = q75(Di) + alpha1*IQR(Di).
+            |---- alpha01 (float) fraction of IQR to take to define the high hysteresis threshold in the iterative phase. The threshold is defined as t_high= q75(Di) + alpha2*IQR(Di).
             |---- use_wasserstein (bool) whether to use the wasserstein-1 distance instead of the normal approcimation of DKL.
-            |---- grid_anomaly_inpaint (2-tuple of int) the dimension of patches to use for inpainting the anomalies (to
+            |---- grid_anomaly_inpaint (2-tuple of 2-tuple of int) the dimension of patches to use for inpainting the anomalies (to
             |               correct the image). Inpainting by patch enables a more stable inpainting when there are many
-            |               pixels missing.
+            |               pixels missing. The first tuple is the dimension for the initialization phase and the second tuple
+            |               is for the iterative phase.
             |---- shuffle_AD_mask_loader (bool) whether to shuffle the different inpainting patch when inpaining anomalies.
             |               If True, it removed the bias of starting the inpainting from the upper left corner to the lower
             |               right one.
+            |---- early_stop (bool) whther to prematurally stop the interative process if the mask does not change between two iteration.
+            |---- tol (int) the tolerance on pixel change to stop iterative process.
             |---- device (str) the device on which to process.
             |---- batch_size (int) the batch_size to use for the error sampling through grid inpainting.
         OUTPUT
@@ -66,8 +69,12 @@ class InpaintAnomalyDetector:
         self.inpaint_net = inpaint_net
         self.grid_hole = grid_hole
         self.grid_step = grid_step
-        self.dilation_radius = dilation_radius
+        self.inpainting_dilation_radius = inpainting_dilation_radius
+        self.cleaning_closing_radius = cleaning_closing_radius
+        self.cleaning_opening_radius = cleaning_opening_radius
         self.n_iter = n_iter
+        self.early_stop = early_stop
+        self.tol = tol
         self.use_wasserstein = use_wasserstein
 
         assert alpha01 <= alpha02, f"alpha01 must be smaller or equal to alpha02. Given alpha01 = {alpha01} and alpha02 = {alpha02}."
@@ -116,7 +123,6 @@ class InpaintAnomalyDetector:
             else:
                 verbose_fn = print
 
-        # make save_directory if necessary
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
 
@@ -135,40 +141,39 @@ class InpaintAnomalyDetector:
         errors = errors.mean(axis=1) # reduction on Channels
 
         if self.use_wasserstein:
-              # STEP 3 First Estimatation of error distribution of each pixel
-              p0 = np.random.normal(loc=np.zeros(image.shape[1:]), scale=np.ones(image.shape[1:])*np.quantile(errors.std(axis=0), 0.25), size=errors.shape)
-              pA = np.random.normal(loc=errors.mean(axis=0), scale=errors.std(axis=0), size=errors.shape)
-              # STEP 4 Compute W1 distance map between pA and p0
-              D0 = self.pixelwise_wassertein_1(p0, pA)
+            # STEP 3 First Estimatation of error distribution of each pixel
+            p0 = np.random.normal(loc=np.zeros(image.shape[1:]), scale=np.ones(image.shape[1:])*np.quantile(errors.std(axis=0), 0.25), size=errors.shape)
+            pA = errors#np.random.normal(loc=errors.mean(axis=0), scale=errors.std(axis=0), size=errors.shape)
+            # STEP 4 Compute W1 distance map between pA and p0
+            D0 = self.pixelwise_wassertein_1(p0, pA)
         else:
-              # STEP 3 First Estimatation of error distribution of each pixel
-              if verbose: verbose_fn("Estimating prior and posterior distribution parameters.")
-              p0 = (np.zeros(image.shape[1:]), np.ones(image.shape[1:])*np.quantile(errors.std(axis=0), 0.25))
-              pA = (errors.mean(axis=0), errors.std(axis=0))
-              # STEP 4 Compute KL distance map between pA and p0
-              if verbose: verbose_fn("Computing the distance map between prior and posterior distribution.")
-              D0 = self.kl_divergence_normal(p0, pA)
+            # STEP 3 First Estimatation of error distribution of each pixel
+            p0 = (np.zeros(image.shape[1:]), np.ones(image.shape[1:])*np.quantile(errors.std(axis=0), 0.25))
+            pA = (errors.mean(axis=0), errors.std(axis=0))
+            # STEP 4 Compute KL distance map between pA and p0
+            D0 = self.kl_divergence_normal(p0, pA)
 
-        # STEP 5 Hysteresis Threshold D0
+        # STEP 5 Hysteresis Threshold D0 with IQR as threshold
         t_low = np.quantile(D0, 0.75) + (np.quantile(D0, 0.75) - np.quantile(D0, 0.25)) * self.alpha01
         t_high = np.quantile(D0, 0.75) + (np.quantile(D0, 0.75) - np.quantile(D0, 0.25)) * self.alpha02
-        print(f"Thresholding distance map with t_low : {t_low:.5f} and t_high {t_high:.5f}")
+        if verbose: verbose_fn(f"Thresholding distance map with t_low : {t_low:.5f} and t_high {t_high:.5f}")
         mA0 = skimage.filters.apply_hysteresis_threshold(D0, t_low, t_high)
+        if verbose: verbose_fn(f"Anomalous pixel detected : {int(mA0.sum())}")
 
         # STEP 6 Remove detected anomaly with normal element using the inpainter
         if verbose: verbose_fn(f"Inpaint anomalies on original image.")
-        mA_dilated = skimage.morphology.binary_dilation(mA0, selem=skimage.morphology.disk(self.dilation_radius))
-        im_corrected_0 = self._inpaint_anomaly(image, torch.tensor(mA_dilated).unsqueeze(0))
+        mA_dilated = skimage.morphology.binary_dilation(mA0, selem=skimage.morphology.disk(self.inpainting_dilation_radius[0]))
+        im_corrected_0 = self._inpaint_anomaly(image, torch.tensor(mA_dilated).unsqueeze(0), grid_dim=self.grid_anomaly_inpaint[0])
 
         if save_dir:
-            io.imsave(os.path.join(save_dir, 'sqrtD0.png'), skimage.img_as_ubyte(skimage.exposure.rescale_intensity(np.sqrt(D0+1e-12), out_range=(0.0,1.0))), check_contrast=False)
+            io.imsave(os.path.join(save_dir, 'D0.png'), skimage.img_as_ubyte(skimage.exposure.rescale_intensity(np.sqrt(D0+1e-12), out_range=(0.0,1.0))), check_contrast=False)
             io.imsave(os.path.join(save_dir, 'mA0.png'), skimage.img_as_ubyte(mA0), check_contrast=False)
             io.imsave(os.path.join(save_dir, 'im_corrected_0.png'), skimage.img_as_ubyte(skimage.exposure.rescale_intensity(im_corrected_0.cpu().numpy()[0], out_range=(0.0,1.0))), check_contrast=False)
 
         #--------------------------------------------------
         #      PHASE 2 : Clean Iteratively Anomaly Mask
         #--------------------------------------------------
-        mAi = mA0
+        mAi = mAi_prev = mA0
         im_corrected = im_corrected_0
         if verbose: verbose_fn("Iterative Ajustment of the anomaly mask.")
 
@@ -180,7 +185,7 @@ class InpaintAnomalyDetector:
             if self.use_wasserstein:
                   # STEP 2.2 Estimatation of error distribution of each pixel of corrected image
                   p0i = np.random.normal(loc=np.zeros(image.shape[1:]), scale=np.ones(image.shape[1:])*np.quantile(errors.std(axis=0), 0.25), size=errors.shape)
-                  pAi = np.random.normal(loc=errors.mean(axis=0), scale=errors.std(axis=0), size=errors.shape)
+                  pAi = errors#np.random.normal(loc=errors.mean(axis=0), scale=errors.std(axis=0), size=errors.shape)
                   # STEP 2.3 Compute W1 distance map between pAi and p0i
                   Di = self.pixelwise_wassertein_1(p0i, pAi)
             else:
@@ -197,19 +202,27 @@ class InpaintAnomalyDetector:
 
             # STEP 2.5 Get new anomaly mask by removing region that appeared abnormal on corrected images
             mAi = (mAi == 1) & (mAi_normal == 0)
+            mAi = skimage.morphology.binary_closing(mAi, selem=skimage.morphology.disk(self.cleaning_closing_radius))
+            mAi = skimage.morphology.binary_opening(mAi, selem=skimage.morphology.disk(self.cleaning_opening_radius))
 
             # STEP 2.6 reinpaint the original image with the new anomaly mask to obtain a better corrected image
-            mA_dilated = skimage.morphology.binary_dilation(mAi, selem=skimage.morphology.disk(self.dilation_radius))
-            im_corrected = self._inpaint_anomaly(image, torch.tensor(mA_dilated).unsqueeze(0))
+            mA_dilated = skimage.morphology.binary_dilation(mAi, selem=skimage.morphology.disk(self.inpainting_dilation_radius[1]))
+            im_corrected = self._inpaint_anomaly(image, torch.tensor(mA_dilated).unsqueeze(0), grid_dim=self.grid_anomaly_inpaint[1])
 
             if verbose:
-                verbose_fn(f"| Step {i+1:03}/{self.n_iter:03} | Threshold Low {t_low:.5f} High {t_high:.5f} "
-                           f"| Pixel difference : {int(mAi.sum() - mA0.sum())} |")
+                verbose_fn(f"| Step {i+1:03}/{self.n_iter:03} | Threshold Low {t_low:.4f} High {t_high:.4f} | Remaining anomalous pixels : {int(mAi.sum())} |")
 
             if save_dir:
-                io.imsave(os.path.join(save_dir, f'sqrtD{i+1}.png'), skimage.img_as_ubyte(skimage.exposure.rescale_intensity(np.sqrt(Di+1e-12), out_range=(0.0,1.0))), check_contrast=False)
+                io.imsave(os.path.join(save_dir, f'D{i+1}.png'), skimage.img_as_ubyte(skimage.exposure.rescale_intensity(np.sqrt(Di+1e-12), out_range=(0.0,1.0))), check_contrast=False)
                 io.imsave(os.path.join(save_dir, f'mA{i+1}.png'), skimage.img_as_ubyte(mAi), check_contrast=False)
                 io.imsave(os.path.join(save_dir, f'im_corrected_{i+1}.png'), skimage.img_as_ubyte(skimage.exposure.rescale_intensity(im_corrected.cpu().numpy()[0], out_range=(0.0,1.0))), check_contrast=False)
+
+            # check if mask has changed much other wise stop iteration loop
+            if self.early_stop and (np.bitwise_xor(mAi_prev, mAi).sum() < self.tol) and (i < self.n_iter - 1): #if self.early_stop and np.all(mAi == mAi_prev) and (i < self.n_iter - 1):
+                if verbose: verbose_fn(f"Stop iterative process as mask did not change more than {self.tol} pixels. Difference : {np.bitwise_xor(mAi_prev, mAi).sum()}")
+                break
+
+            mAi_prev = mAi
 
         return mAi
 
@@ -349,11 +362,11 @@ class InpaintAnomalyDetector:
         # compute W1 for each pixel
         W1 = np.empty(p1.shape[1:])
         for i in range(p1.shape[1]):
-          for j in range(p1.shape[2]):
-            W1[i,j] = scipy.stats.wasserstein_distance(p1[:,i,j], p2[:,i,j])
+            for j in range(p1.shape[2]):
+                W1[i,j] = scipy.stats.wasserstein_distance(p1[:,i,j], p2[:,i,j])
         return W1
 
-    def _inpaint_anomaly(self, im, anomaly_mask):
+    def _inpaint_anomaly(self, im, anomaly_mask, grid_dim=None):
         """
         Inpaint image on mask by inpainting sequentially part of the image for more stable results.
         ----------
@@ -364,7 +377,8 @@ class InpaintAnomalyDetector:
             |---- im_corr (torch.tensor) the coroected image by patch with dimension [C, H, W].
         """
         c, h, w = im.shape
-        grid_h, grid_w = self.grid_anomaly_inpaint
+        grid_dim = grid_dim if grid_dim is not None else (h,w)
+        grid_h, grid_w = grid_dim
 
         # generate list of masks
         n_grids = (h // grid_h, w // grid_w)
@@ -388,3 +402,80 @@ class InpaintAnomalyDetector:
             im_corr = self._inpaint(im_corr, mask[0])
 
         return im_corr.squeeze(0).cpu()
+
+
+def robust_anomaly_detect(image, ad_inpainter, angles_list=[-15, -7.5, 7.5, 15], flip=True, lower_frac=0.5, upper_frac=0.75, save_dir=None, verbose=False, return_intermediate=False):
+    """
+    Perform a robuste inpainting anomaly detection by detecting anomalies on several transformed image and them
+    thresholding the mean detected anomalies.
+    ----------
+    INPUT
+        |---- image (torch.tensor) the input image on which to detect anomalies with dimension [C, H, W].
+        |---- ad_inpainter (InpaintAnomalyDetector) an anomaly detection inpainting module.
+        |---- angles_list (list of float) the list of angles to use to transform the image. angles are in degree.
+        |---- flip (bool) whether to use horizonzal flip for each transformed image, leading to two times more inpainting.
+        |---- lower_frac (float) the lower bound for the final hysteresis threshold. Setting it to 0.6 means that the lower
+        |               threshold represents pixels that are considered anomalous in at least 60% of the transformation.
+        |---- upper_frac (float) the upper threshold for the final hysteresis threshold. Every pixel detected more that
+        |               upper_frac will be kept.
+        |---- save_dir (str) path to directory where to save samples of each step of the iterative processs. If None
+        |               nothing is saved.
+        |---- verbose (bool) whether to print evolution in logger or stdout.
+        |---- return_intermediate (bool) whether to return intermediate mask (anomaly mask for each transformation).
+    OUTPUT
+        |---- mA_final (np.array)
+        |---- anomaly_map (np.array)
+        |---- (mA_list) (list of np.array)
+    """
+    if verbose:
+        if logging.getLogger().hasHandlers():
+            logger = logging.getLogger()
+            verbose_fn = logger.info
+        else:
+            verbose_fn = print
+
+    # placeholder for all computed mask for each transformation
+    mA_list = []
+
+    # detect anomalies on original image
+    if verbose: verbose_fn(">>> Detect anomalies on original image.")
+    save_path = os.path.join(save_dir, 'normal') if save_dir else None
+    mA1 = ad_inpainter.detect(image, save_dir=save_path, verbose=verbose)
+    mA_list.append(mA1)
+
+    # detect anomalies on h-flipped image
+    if flip:
+        if verbose: verbose_fn("\n>>> Detect anomalies on h-flipped image.")
+        save_path = os.path.join(save_dir, 'h-flipped') if save_dir else None
+        mA2 = ad_inpainter.detect(torch.flip(image, [2]), save_dir=save_path, verbose=verbose)
+        mA2 = np.flip(mA2, axis=1) # re-flip result
+        mA_list.append(mA2)
+
+    # rotate and random flip N times
+    for rot_angle in angles_list:
+      if verbose: verbose_fn(f"\n>>> Detect anomalies on {rot_angle:.2f}°-rotated image.")
+      rot_im = torch.from_numpy(scipy.ndimage.rotate(image, rot_angle, axes=(2,1), reshape=False, order=1))
+      save_path = os.path.join(save_path, f'rot{rot_angle}') if save_dir else None
+      mA_rot = ad_inpainter.detect(rot_im, save_dir=save_path, verbose=verbose)
+      mA_rot = scipy.ndimage.rotate(mA_rot, -rot_angle, axes=(1,0), reshape=False, order=0) # rotate back
+      mA_list.append(mA_rot)
+
+      if flip:
+          if verbose: verbose_fn(f"\n>>> Detect anomalies on {rot_angle:.2f}°-rotated-flipped image.")
+          rot_im = torch.from_numpy(scipy.ndimage.rotate(image, rot_angle, axes=(2,1), reshape=False, order=1))
+          rot_im = torch.flip(rot_im, [2])
+          save_path = os.path.join(save_path, f'rot{rot_angle}-flipped') if save_dir else None
+          mA_rot = ad_inpainter.detect(rot_im, save_dir=save_path, verbose=verbose)
+          mA_rot = np.flip(mA_rot, axis=1) # re-flip
+          mA_rot = scipy.ndimage.rotate(mA_rot, -rot_angle, axes=(1,0), reshape=False, order=0) # rotate back
+          mA_list.append(mA_rot)
+
+    # take the 'hysteresis' intersection of all mask --> keep intersection + adjacent region
+    anomaly_map = np.stack([skimage.img_as_float(m) for m in mA_list], axis=2).mean(axis=2)
+    mA_final = skimage.filters.apply_hysteresis_threshold(anomaly_map, lower_frac, upper_frac) # keep regions that appears 75% of time + nearby region appearing at least 50%
+    if verbose: verbose_fn(f">>> Merged detected anomalies : {int(mA_final.sum())} pixel detected.")
+
+    if return_intermediate:
+        return mA_final, anomaly_map, mA_list
+    else:
+        return mA_final, anomaly_map
