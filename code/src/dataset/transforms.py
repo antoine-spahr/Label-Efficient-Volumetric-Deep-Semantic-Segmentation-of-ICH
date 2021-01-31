@@ -188,9 +188,10 @@ class Translate:
                  np.random.uniform(low=image.shape[1]*self.low, high=image.shape[1]*self.high)]
         shift += [0] * (image.ndim - 2)
 
-        image = scipy.ndimage.shift(image, shift, order=3)#, cval=image.min())
+        image = scipy.ndimage.shift(image, shift, order=1)#, cval=image.min())
+        #image = np.stack([scipy.ndimage.shift(image[:,:,i], shift[:2], order=3) for i in range(image.shape[2])], axis=2)
         if mask is not None:
-            mask = scipy.ndimage.shift(mask, shift, order=0)
+            mask = scipy.ndimage.shift(mask, shift[:2], order=0)
             return image, mask
         else:
             return image
@@ -242,15 +243,17 @@ class Scale:
                        (int(np.floor(adjust_w)), int(np.ceil(adjust_w)))] + [(0,0)] * (image.ndim - 2)
 
         if scale_factor >= 1:
-            image = skimage.util.crop(scipy.ndimage.zoom(image, scales, order=3), adjust_list)
+            image = skimage.util.crop(scipy.ndimage.zoom(image, scales, order=1), adjust_list)
+            #image = np.stack([skimage.util.crop(scipy.ndimage.zoom(image[:,:,i], scales[:2], order=3), adjust_list[:2]) for i in range(image.shape[2])], axis=2)
             if mask is not None:
-                mask = skimage.util.crop(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
+                mask = skimage.util.crop(scipy.ndimage.zoom(mask, scales[:2], order=0), adjust_list[:2])
         else:
             #image = skimage.util.pad(scipy.ndimage.zoom(image, scales, order=3), adjust_list)#, constant_values=image.min())
-            image = np.pad(scipy.ndimage.zoom(image, scales, order=3), adjust_list)
+            image = np.pad(scipy.ndimage.zoom(image, scales, order=1), adjust_list)
+            #image = np.stack([np.pad(scipy.ndimage.zoom(image[:,:,i], scales[:2], order=3), adjust_list[:2]) for i in range(image.shape[2])], axis=2)
             if mask is not None:
                 #mask = skimage.util.pad(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
-                mask = np.pad(scipy.ndimage.zoom(mask, scales, order=0), adjust_list)
+                mask = np.pad(scipy.ndimage.zoom(mask, scales[:2], order=0), adjust_list[:2])
 
         if mask is not None:
             return image, mask
@@ -294,7 +297,8 @@ class Rotate:
         # randomly sample an angle
         angle = np.random.uniform(low=self.low, high=self.high)
 
-        image = scipy.ndimage.rotate(image, angle, axes=(1,0), order=3, reshape=False)#, cval=image.min())
+        image = scipy.ndimage.rotate(image, angle, axes=(1,0), order=1, reshape=False)#, cval=image.min())
+        #image = np.stack([scipy.ndimage.rotate(image[:,:,i], angle, axes=(1,0), order=1, reshape=False) for i in range(image.shape[2])], axis=2)
         if mask is not None:
             mask = scipy.ndimage.rotate(mask, angle, axes=(1,0), order=0, reshape=False)
             return image, mask
@@ -652,9 +656,9 @@ class ToTorchTensor:
             |---- image (torch.Tensor) the converted image.
             |---- mask (torch.Tensor) the converted mask.
         """
-        image = torch.from_numpy(image).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(image)
+        image = torchvision.transforms.ToTensor()(image)#torch.from_numpy(image).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(image)
         if mask is not None:
-            mask = torch.from_numpy(mask).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(mask)
+            mask = torchvision.transforms.ToTensor()(mask)#torch.from_numpy(mask).unsqueeze(dim=0)#torchvision.transforms.ToTensor()(mask)
             return image, mask.bool()
         else:
             return image

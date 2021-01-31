@@ -115,7 +115,7 @@ class InpaintAnomalyDetector:
         # check that image is [C, H, W]
         assert image.ndim == 3, f"The input image must be 3D dimensional [C, H, W] but image with shape {image.shape} was given."
 
-        # if verbose define where info are printed (print of log)
+        # if verbose, define where info are printed (print of log)
         if verbose:
             if logging.getLogger().hasHandlers():
                 logger = logging.getLogger()
@@ -217,7 +217,7 @@ class InpaintAnomalyDetector:
                 io.imsave(os.path.join(save_dir, f'mA{i+1}.png'), skimage.img_as_ubyte(mAi), check_contrast=False)
                 io.imsave(os.path.join(save_dir, f'im_corrected_{i+1}.png'), skimage.img_as_ubyte(skimage.exposure.rescale_intensity(im_corrected.cpu().numpy()[0], out_range=(0.0,1.0))), check_contrast=False)
 
-            # check if mask has changed much other wise stop iteration loop
+            # check if mask has changed much otherwise stop iteration loop
             if self.early_stop and (np.bitwise_xor(mAi_prev, mAi).sum() < self.tol) and (i < self.n_iter - 1): #if self.early_stop and np.all(mAi == mAi_prev) and (i < self.n_iter - 1):
                 if verbose: verbose_fn(f"Stop iterative process as mask did not change more than {self.tol} pixels. Difference : {np.bitwise_xor(mAi_prev, mAi).sum()}")
                 break
@@ -294,7 +294,7 @@ class InpaintAnomalyDetector:
         ----------
         INPUT
             |---- input (torch.tensor) the image on which the error sample is computed with the grids. It should have
-            |               dimension [C, H, W] or [1, C, H, W].
+            |               dimension [C, H, W].
             |---- grid_masks (np.array) the set of grid mask to use for inpainting. It should have dimension [N_grid, H, W].
             |---- verbose (bool) whether to print a progress bar of the inpainting process.
         OUTPUT

@@ -18,9 +18,9 @@ def batch_binary_confusion_matrix(pred, target):
         |---- target (torch.tensor) the binary ground truth with shape (B x *).
     OUTPUT
         |---- tn (torch.tensor) The True Negative for each element of the batch. Shape (B).
-        |---- fb (torch.tensor) The False Positive for each element of the batch. Shape (B).
+        |---- fp (torch.tensor) The False Positive for each element of the batch. Shape (B).
         |---- fn (torch.tensor) The False Negative for each element of the batch. Shape (B).
-        |---- tb (torch.tensor) The True Positive for each element of the batch. Shape (B).
+        |---- tp (torch.tensor) The True Positive for each element of the batch. Shape (B).
     """
     assert pred.shape == target.shape, f'Shapes do not match! {pred.shape} =/= {target.shape}'
     assert pred.ndim > 1, f'The tensor must have more that a single dimension. {pred.ndim} dimension passed.'

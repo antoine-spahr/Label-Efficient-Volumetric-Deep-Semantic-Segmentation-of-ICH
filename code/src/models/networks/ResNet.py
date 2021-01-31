@@ -210,5 +210,5 @@ def ResNet152(num_classes=10, input_channels=3):
 
 #%%
 # import torchsummary
-# net = ResNet101(num_classes=2, in_ch=1)
-# torchsummary.summary(net, (1,256,256))
+# net = ResNet50(num_classes=1000, input_channels=3)
+# torchsummary.summary(net, (3,256,256))

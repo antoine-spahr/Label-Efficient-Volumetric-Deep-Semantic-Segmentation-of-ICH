@@ -142,14 +142,22 @@ def analyse_supervised_exp(exp_folder, data_path, n_fold, config_folder=None, sa
             axs.append(ax_i)
             # load image and window it
             if not is_brain_exp:
-                slice_im = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}.tif'))
+                #slice_im = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}.tif'))
+                try:
+                    slice_im = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}.tif'))
+                except FileNotFoundError:
+                    slice_im = io.imread(os.path.join(data_path, f'{samp_row.volID:03}/ct_scans/{samp_row.slice}.tif'))
             else:
                 slice_im = io.imread(os.path.join(data_path, f'{samp_row.volID:03}/ct/{samp_row.slice}.tif'))
             slice_im = window_ct(slice_im, win_center=cfg['data']['win_center'], win_width=cfg['data']['win_width'], out_range=(0,1))
             # load truth mask
             if is_ICH == 1:
                 if not is_brain_exp:
-                    slice_trg = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}_ICH_Seg.bmp'))
+                    #slice_trg = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}_ICH_Seg.bmp'))
+                    try:
+                        slice_trg = io.imread(os.path.join(data_path, f'Patient_CT/{samp_row.volID:03}/{samp_row.slice}_ICH_Seg.bmp'))
+                    except FileNotFoundError:
+                        slice_trg = io.imread(os.path.join(data_path, f'{samp_row.volID:03}/masks/{samp_row.slice}_ICH.bmp'))
                 else:
                     slice_trg = io.imread(os.path.join(data_path, f'{samp_row.volID:03}/mask/{samp_row.slice}_Seg.bmp'))
             else:

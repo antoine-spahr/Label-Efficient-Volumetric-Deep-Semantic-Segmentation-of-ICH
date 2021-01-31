@@ -155,7 +155,7 @@ def curve_std(data, serie_names, colors=None, ax=None, lw=1, CI_alpha=0.25, rep_
             elif isinstance(legend_kwargs, dict):
                 ax.legend(handles, labels, **legend_kwargs)
 
-def metric_barplot(metrics_scores, serie_names, group_names, colors=None, w=None,
+def metric_barplot(metrics_scores, serie_names, group_names, c95='normal', colors=None, w=None,
                    ax=None, fontsize=12, jitter=False, jitter_color=None, jitter_alpha=0.5, gap=None,
                    tick_angle=0, legend=True, legend_kwargs=None, display_val=False, display_format='.2%',
                    display_pos='bottom'):
@@ -177,6 +177,7 @@ def metric_barplot(metrics_scores, serie_names, group_names, colors=None, w=None
     OUTPUT
         |---- None
     """
+    assert c95 in ['normal', 'quantile'], f"c95 must be either 'normal' or 'quantile'. Given : {c95}"
     # find axes
     ax = plt.gca() if ax is None else ax
 
@@ -193,7 +194,8 @@ def metric_barplot(metrics_scores, serie_names, group_names, colors=None, w=None
     for metric, offset, name, color in zip(metrics_scores, offsets, serie_names, colors):
         means = np.nanmean(metric, axis=0)
         stds = np.nanstd(metric, axis=0)
-        ax.bar(ind + offset*w/2, means, width=w, yerr=1.96*stds,
+        err = 1.96*stds if c95 == 'normal' else np.stack([means - np.quantile(metric, 0.025, axis=0), np.quantile(metric, 0.975, axis=0) - means], axis=0)
+        ax.bar(ind + offset*w/2, means, width=w, yerr=err,
                fc=color, ec='black', lw=1, label=name)
 
         if jitter:
@@ -204,10 +206,12 @@ def metric_barplot(metrics_scores, serie_names, group_names, colors=None, w=None
         if display_val:
             for i, x in enumerate(ind):
                 if display_pos == 'bottom':
-                    ax.text(x + offset*w/2, means[i]-1.96*stds[i], ('{0:'+display_format+'}').format(means[i]),
+                    y = means[i]-1.96*stds[i] if c95 == 'normal' else np.quantile(metric[:,i], 0.025)
+                    ax.text(x + offset*w/2, y, ('{0:'+display_format+'}').format(means[i]),
                             fontsize=fontsize, ha='center', va='top', rotation=90)
                 elif display_pos == 'top':
-                    ax.text(x + offset*w/2, means[i]+1.96*stds[i], ('{0:'+display_format+'}').format(means[i]),
+                    y = means[i]+1.96*stds[i] if c95 == 'normal' else np.quantile(metric[:,i], 0.975)
+                    ax.text(x + offset*w/2, y, ('{0:'+display_format+'}').format(means[i]),
                             fontsize=fontsize, ha='center', va='bottom', rotation=90)
                 else:
                     raise ValueError('Unsupported display_pos parameter. Mus be top or bottom.')

@@ -11,6 +11,7 @@ import os
 import pandas as pd
 import numpy as np
 import skimage.io as io
+import skimage.transform
 import skimage
 import cv2
 import torch
@@ -90,6 +91,84 @@ class public_SegICH_Dataset2D(data.Dataset):
         slice, mask = self.transform(slice, mask)
 
         return slice, mask, patient_nbr, slice_nbr
+
+class public_SegICH_AttentionDataset2D(data.Dataset):
+    """
+
+    """
+    def __init__(self, data_df, data_path, augmentation_transform=[tf.Translate(low=-0.1, high=0.1), tf.Rotate(low=-10, high=10),
+                 tf.Scale(low=0.9, high=1.1), tf.HFlip(p=0.5)], window=None, output_size=256):
+        """
+        Build a dataset for the 2D annotated segmentation of ICH with attention map.
+        ----------
+        INPUT
+            |---- data_df (pd.DataFrame) the input dataframe of samples. Each row must contains a patient number, a slice
+            |           number, an image filename, a mask filename, and an attention map filename.
+            |---- data_path (str) path to the root of the dataset folder (until where the samples' filnames begins).
+            |---- augmentation_transform (list of transofrom) data augmentation transformation to apply.
+            |---- window (tuple (center, width)) the window for CT intensity rescaling. If None, no windowing is performed.
+            |---- output_size (int) the dimension of the output (H = W).
+        OUTPUT
+            |---- ICH_Dataset2D (torch.Dataset) the 2D dataset.
+        """
+        super(public_SegICH_AttentionDataset2D, self).__init__()
+        self.data_df = data_df
+        self.data_path = data_path
+        self.window = window
+
+        self.transform = tf.Compose(*augmentation_transform,
+                                    tf.Resize(H=output_size, W=output_size),
+                                    tf.ToTorchTensor())
+
+    def __len__(self):
+        """
+        Return the number of samples in the dataset.
+        ----------
+        INPUT
+            |---- None
+        OUTPUT
+            |---- N (int) the number of samples in the dataset.
+        """
+        return len(self.data_df)
+
+    def __getitem__(self, idx):
+        """
+        Extract the stacked CT and attention map, the corresponding ground truth mask, volume id, and slice number sepcified by idx.
+        ----------
+        INPUT
+            |---- idx (int) the sample index in self.data_df.
+        OUTPUT
+            |---- input (torch.tensor) the CT image stacked with the attention map with dimension (2 x H x W).
+            |---- mask (torch.tensor) the segmentation mask with dimension (1 x H x W).
+            |---- patient_nbr (torch.tensor) the patient id as a single value.
+            |---- slice_nbr (torch.tensor) the slice number as a single value.
+        """
+        # load image
+        slice = io.imread(self.data_path + self.data_df.iloc[idx].ct_fn)
+        if self.window:
+            slice = window_ct(slice, win_center=self.window[0], win_width=self.window[1], out_range=(0,1))
+        # load attention map and stack it with the slice
+        if self.data_df.iloc[idx].attention_fn == 'None':
+            attention_map = np.zeros_like(slice)
+        else:
+            attention_map = skimage.img_as_float(io.imread(self.data_path + self.data_df.iloc[idx].attention_fn))
+            attention_map = skimage.transform.resize(attention_map, slice.shape[:2], order=1, preserve_range=True)
+        input = np.stack([slice, attention_map], axis=2)
+
+        # load mask if one, else make a blank array
+        if self.data_df.iloc[idx].mask_fn == 'None':
+            mask = np.zeros_like(slice)
+        else:
+            mask = io.imread(self.data_path + self.data_df.iloc[idx].mask_fn)
+        # get the patient id
+        patient_nbr = torch.tensor(self.data_df.iloc[idx].id)
+        # get slice number
+        slice_nbr = torch.tensor(self.data_df.iloc[idx].slice)
+
+        # Apply the transform : Data Augmentation + image formating
+        input, mask = self.transform(input, mask)
+
+        return input, mask, patient_nbr, slice_nbr
 
 class public_SegICH_Dataset3D(data.Dataset):
     """

@@ -13,6 +13,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.models.networks.InpaintingNetwork import GatedConv2d, UpsampleGatedConv2d
+
 class UNet(nn.Module):
     """
     U-Net model as a Pytorch nn.Module. The class enables to build 2D and 3D U-Nets with different depth.

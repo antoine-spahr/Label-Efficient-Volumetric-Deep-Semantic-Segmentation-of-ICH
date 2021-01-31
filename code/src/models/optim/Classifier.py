@@ -19,7 +19,7 @@ import logging
 import os
 import json
 from datetime import timedelta
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, accuracy_score, recall_score, precision_score, f1_score
 from sklearn.manifold import TSNE
 from src.utils.print_utils import print_progessbar
 
@@ -74,6 +74,10 @@ class BinaryClassifier:
             'eval':{
                 'time': None,
                 'auc': None,
+                'acc': None,
+                'recall': None,
+                'precision': None,
+                'f1': None,
                 'pred': None,
                 'repr': None
             }
@@ -150,8 +154,8 @@ class BinaryClassifier:
 
             auc = None
             if valid_dataset:
-                auc = self.evaluate(valid_dataset, save_tsne=False, return_auc=True)
-                valid_summary = f'| Valid AUC {auc:.3%} '
+                auc, acc, recall, precision, f1 = self.evaluate(valid_dataset, save_tsne=False, return_scores=True)
+                valid_summary = f'| AUC {auc:.3%} | Accuracy {acc:.3%} | Recall {recall:.3%} | Precision {precision:.3%} | F1 {f1:.3%} '
             else:
                 valid_summary = ''
 
@@ -181,7 +185,7 @@ class BinaryClassifier:
                                               'data': epoch_loss_list}
         logger.info(f"Finished training inpainter Binary Classifier in {timedelta(seconds=int(self.outputs['train']['time']))}")
 
-    def evaluate(self, dataset, save_tsne=False, return_auc=False):
+    def evaluate(self, dataset, save_tsne=False, return_scores=False):
         """
         Evaluate the passed network on the given dataset for the Context retoration task.
         ----------
@@ -190,9 +194,13 @@ class BinaryClassifier:
             |           and the sample index.
             |---- save_tsne (bool) whether to compute and store in self.outputs the tsne representation of the feature map
             |           after the average pooling layer and before the MLP
-            |---- return_auc (bool) whether to return the measured ROC AUC.
+            |---- return_scores (bool) whether to return the measured ROC AUC, accuracy, recall, precision and f1-score.
         OUTPUT
+            |---- (auc) (float) the ROC AUC on the dataset.
             |---- (acc) (float) the accuracy on the dataset.
+            |---- (recall) (float) the recall on the dataset.
+            |---- (precision) (float) the precision on the dataset.
+            |---- (f1) (float) the f1-score on the dataset.
         """
         logger = logging.getLogger()
         # make loader
@@ -217,14 +225,16 @@ class BinaryClassifier:
                     # get representation
                     self.net.return_bottleneck = True
                     pred, repr = self.net(input)
+                    pred = nn.functional.softmax(pred, dim=1)
                     # down sample representation for reduced memory impact
                     repr = nn.AdaptiveAvgPool2d((4,4))(repr)
                     # add ravelled representations to placeholder
                     idx_repr += list(zip(idx.cpu().data.tolist(), repr.view(repr.shape[0], -1).cpu().data.tolist()))
-                    idx_label_pred += list(zip(idx.cpu().data.tolist(), label.cpu().data.tolist(), pred.argmax(dim=1).cpu().data.tolist()))
+                    idx_label_pred += list(zip(idx.cpu().data.tolist(), label.cpu().data.tolist(), pred.argmax(dim=1).cpu().data.tolist(), pred[:,1].cpu().data.tolist())) # pred score is softmax activation of class 1
                 else:
                     pred = self.net(input)
-                    idx_label_pred += list(zip(idx.cpu().data.tolist(), label.cpu().data.tolist(), pred.argmax(dim=1).cpu().data.tolist()))
+                    pred = nn.functional.softmax(pred, dim=1)
+                    idx_label_pred += list(zip(idx.cpu().data.tolist(), label.cpu().data.tolist(), pred.argmax(dim=1).cpu().data.tolist(), pred[:,1].cpu().data.tolist()))
                 # print_progress
                 if self.print_progress:
                     print_progessbar(b, n_batch, Name='\t\tEvaluation Batch', Size=50, erase=True)
@@ -242,17 +252,25 @@ class BinaryClassifier:
             logger.info('Succesfully computed the t-SNE representation.')
 
         # Compute Accuracy
-        idx, label, pred = zip(*idx_label_pred)
-        label, pred = np.array(label), np.array(pred)
-        auc = roc_auc_score(label, pred)
+        _, label, pred, pred_score = zip(*idx_label_pred)
+        label, pred, pred_score = np.array(label), np.array(pred), np.array(pred_score)
+        auc = roc_auc_score(label, pred_score)
+        acc = accuracy_score(label, pred)
+        recall = recall_score(label, pred)
+        precision = precision_score(label, pred)
+        f1 = f1_score(label, pred)
         self.outputs['eval']['auc'] = auc
+        self.outputs['eval']['acc'] = acc
+        self.outputs['eval']['recall'] = recall
+        self.outputs['eval']['precision'] = precision
+        self.outputs['eval']['f1'] = f1
         self.outputs['eval']['pred'] = idx_label_pred
 
         # finish evluation
         self.outputs['eval']['time'] = time.time() - start_time
 
-        if return_auc:
-            return auc
+        if return_scores:
+            return auc, acc, recall, precision, f1
 
     def get_state_dict(self):
         """
@@ -266,6 +284,17 @@ class BinaryClassifier:
         return self.net.state_dict()
 
     def save_model(self, export_fn):
+        """
+        Save the model.
+        ----------
+        INPUT
+            |---- export_fn (str) the export path.
+        OUTPUT
+            |---- None
+        """
+        torch.save(self.net, export_fn)
+
+    def save_model_state_dict(self, export_fn):
         """
         Save the model.
         ----------

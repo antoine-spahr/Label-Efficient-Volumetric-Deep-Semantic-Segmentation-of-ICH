@@ -51,20 +51,22 @@ def main(config_path):
         torch.cuda.manual_seed_all(cfg.seed)
         torch.backends.cudnn.deterministic = True
 
-    # set device
-    if cfg.device:
-        cfg.device = torch.device(cfg.device)
-    else:
-        cfg.device = get_available_device()
-
-    # set n_thread
-    if cfg.n_thread > 0: torch.set_num_threads(cfg.n_thread)
-
     # initialize logger
     logger = initialize_logger(os.path.join(out_path, 'log.txt'))
     if os.path.exists(os.path.join(out_path, f'checkpoint.pt')):
         logger.info('\n' + '#'*30 + f'\n Recovering Session \n' + '#'*30)
     logger.info(f"Experiment : {cfg.exp_name}")
+
+    # set device
+    if cfg.device:
+        cfg.device = torch.device(cfg.device)
+    else:
+        cfg.device = torch.device(f'cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+    logger.info(f"Device set to {cfg.device}. {torch.cuda.device_count()} GPU available, "
+                f"{len(cfg.multi_gpu_id) if cfg.multi_gpu_id else 1} used.")
+
+    # set n_thread
+    if cfg.n_thread > 0: torch.set_num_threads(cfg.n_thread)
 
     #--------------------------------------------------------------------
     #                           Make Datasets
@@ -110,6 +112,13 @@ def main(config_path):
         generator_net = SAGatedGenerator(**cfg.net.gen)
 
     discriminator_net = PatchDiscriminator(**cfg.net.dis)
+
+    if cfg.multi_gpu_id is not None and len(cfg.multi_gpu_id) > 1: # set network for multi-GPU
+        #generator_net = torch.nn.SyncBatchNorm.convert_sync_batchnorm(generator_net)
+        generator_net = torch.nn.DataParallel(generator_net, device_ids=cfg.multi_gpu_id)
+        #discriminator_net = torch.nn.SyncBatchNorm.convert_sync_batchnorm(discriminator_net)
+        discriminator_net = torch.nn.DataParallel(discriminator_net, device_ids=cfg.multi_gpu_id)
+        logger.info("Enabling multi-GPU computation.")
 
     gen_params = [f"--> {k} : {v}" for k, v in cfg.net.gen.items()]
     logger.info("Gated Generator Parameters \n\t" + "\n\t".join(gen_params))

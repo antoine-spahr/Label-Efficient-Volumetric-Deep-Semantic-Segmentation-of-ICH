@@ -5,7 +5,8 @@
     "data_valid": "../../../data/inpaint_valid_sample/",
     "output": "../../../outputs/inpainting/"
   },
-  "device": "cuda:0",
+  "device": "cuda",
+  "multi_gpu_id": [0,1],
   "n_thread": 0,
   "seed": 42,
   "print_progress": true,
