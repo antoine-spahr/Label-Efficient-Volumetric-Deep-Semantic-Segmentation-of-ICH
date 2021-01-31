@@ -132,12 +132,18 @@ def main(config_path):
                         checkpoint_path=os.path.join(out_path, f'checkpoint.pt'))
 
     # Evaluate
-    auc = classifier.evaluate(test_RSNA_dataset, save_tsne=False, return_auc=True)
+    auc, acc, recall, precision, f1 = classifier.evaluate(test_RSNA_dataset, save_tsne=False, return_scores=True)
     logger.info(f"Classifier Test AUC : {auc:.2%}")
+    logger.info(f"Classifier Test Accuracy : {acc:.2%}")
+    logger.info(f"Classifier Test Recall : {recall:.2%}")
+    logger.info(f"Classifier Test Precision : {precision:.2%}")
+    logger.info(f"Classifier Test F1-score : {f1:.2%}")
 
     # save model, outputs
     classifier.save_model(os.path.join(out_path, 'resnet.pt'))
     logger.info(f"{cfg.net.resnet} saved at " + os.path.join(out_path, 'resnet.pt'))
+    classifier.save_model_state_dict(os.path.join(out_path, 'resnet_state_dict.pt'))
+    logger.info(f"{cfg.net.resnet} saved at " + os.path.join(out_path, 'resnet_state_dict.pt'))
     classifier.save_outputs(os.path.join(out_path, 'outputs.json'))
     logger.info("Classifier outputs saved at " + os.path.join(out_path, 'outputs.json'))
     test_df.reset_index(drop=True).to_csv(os.path.join(out_path, 'eval_data_info.csv'))
@@ -147,6 +153,14 @@ def main(config_path):
     if os.path.exists(os.path.join(out_path, f'checkpoint.pt')):
         os.remove(os.path.join(out_path, f'checkpoint.pt'))
         logger.info('Checkpoint deleted.')
+
+    cfg.device = str(cfg.device)
+    cfg.train.model_param.lr_scheduler = str(cfg.train.model_param.lr_scheduler)
+    cfg.train.model_param.loss_fn = str(cfg.train.model_param.loss_fn)
+    cfg.train.model_param.loss_fn_kwargs.weight = list(cfg.train.model_param.loss_fn_kwargs.weight)
+    with open(os.path.join(out_path, 'config.json'), 'w') as f:
+        json.dump(cfg, f)
+    logger.info(f"Config file saved at {os.path.join(out_path, 'config.json')}")
 
 def initialize_logger(logger_fn):
     """

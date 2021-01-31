@@ -1,0 +1,110 @@
+{
+  "exp_name": "BinaryClassificationUNet2D",
+  "path":{
+    "data":{
+      "Sup": "../../../data/publicSegICH2D/",
+      "SSL": "../../../data/RSNA/"
+    },
+    "output": "../../../outputs/"
+  },
+  "device": null,
+  "n_thread": 0,
+  "seed": 42,
+  "print_progress": true,
+  "data":{
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256
+  },
+  "SSL":{
+    "dataset":{
+      "n_data_0": 1000,
+      "n_data_1": 1000,
+      "frac_eval": 0.1,
+      "augmentation":{
+        "train":{
+          "Translate": {"low": -0.1, "high": 0.1},
+          "Rotate": {"low": -10, "high": 10},
+          "Scale": {"low": 0.9, "high": 1.1},
+          "HFlip": {"p": 0.5}
+        },
+        "eval":{}
+      }
+    },
+    "net":{
+      "depth": 5,
+      "top_filter": 32,
+      "use_3D": false,
+      "in_channels": 1,
+      "MLP_head": [1024, 256, 2],
+      "midchannels_factor": 2,
+      "p_dropout": 0.0
+    },
+    "train":{
+      "model_path_to_load": null,
+      "model_param": {
+        "loss_fn": "CrossEntropyLoss",
+        "loss_fn_kwargs":{
+          "reduction": "mean"
+        },
+        "n_epoch": 5,
+        "batch_size": 64,
+        "lr": 1e-3,
+        "lr_scheduler": "ExponentialLR",
+        "lr_scheduler_kwargs": {
+          "gamma": 0.96
+        },
+        "weight_decay": 1e-6,
+        "num_workers": 12}
+    }
+  },
+  "Sup":{
+    "dataset":{
+      "frac_negative": 2.0,
+      "augmentation":{
+        "train":{
+          "Translate": {"low": -0.1, "high": 0.1},
+          "Rotate": {"low": -15, "high": 15},
+          "Scale": {"low": 0.9, "high": 1.1},
+          "HFlip": {"p": 0.5}
+        },
+        "eval":{}
+      }
+    },
+    "split":{
+      "n_fold": 2,
+      "shuffle": true
+    },
+    "net":{
+      "depth": 5,
+      "top_filter": 32,
+      "use_3D": false,
+      "in_channels": 1,
+      "out_channels": 1,
+      "bilinear": false,
+      "midchannels_factor": 2,
+      "p_dropout": 0.0
+    },
+    "train":{
+      "model_path_to_load": null,
+      "validate_epoch": true,
+      "model_param": {
+        "loss_fn": "BinaryDiceLoss",
+        "loss_fn_kwargs":{
+          "alpha": 0.2,
+          "reduction": "mean",
+          "p": 2
+        },
+        "n_epoch": 4,
+        "batch_size": 16,
+        "lr": 1e-3,
+        "lr_scheduler": "ExponentialLR",
+        "lr_scheduler_kwargs": {
+          "gamma": 0.96
+        },
+        "weight_decay": 1e-6,
+        "num_workers": 12
+      }
+    }
+  }
+}
