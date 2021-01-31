@@ -1,0 +1,74 @@
+{
+  "exp_name": "attentionUNet2D_01-11",
+  "path": {
+    "data": "../../../../../../mnt/data/ICH_data/publicSegICH2D_augmented/",
+    "output": "../../../outputs/attention_unet/"
+  },
+  "device": "cuda:1",
+  "seed": 42,
+  "print_progress": true,
+  "data": {
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256,
+    "augmentation": {
+      "train": {
+        "Translate": {
+          "low": -0.1,
+          "high": 0.1
+        },
+        "Rotate": {
+          "low": -15,
+          "high": 15
+        },
+        "Scale": {
+          "low": 0.9,
+          "high": 1.1
+        },
+        "HFlip": {
+          "p": 0.5
+        }
+      },
+      "eval": {}
+    }
+  },
+  "dataset": {
+    "frac_negative": 2
+  },
+  "split": {
+    "n_fold": 10,
+    "shuffle": true
+  },
+  "net": {
+    "depth": 5,
+    "top_filter": 32,
+    "use_3D": false,
+    "in_channels": 2,
+    "out_channels": 1,
+    "use_gatedConv": false,
+    "bilinear": false,
+    "midchannels_factor": 2,
+    "p_dropout": 0.0
+  },
+  "train": {
+    "model_path_to_load": null,
+    "validate_epoch": true,
+    "params": {
+      "loss_fn": "BinaryDiceLoss",
+      "loss_fn_kwargs": {
+        "reduction": "mean",
+        "p": 2,
+        "alpha": 0.2
+      },
+      "n_epoch": 100,
+      "batch_size": 16,
+      "lr": 0.001,
+      "lr_scheduler": "ExponentialLR",
+      "lr_scheduler_kwargs": {
+        "gamma": 0.96
+      },
+      "weight_decay": 0.000001,
+      "num_workers": 16
+    }
+  }
+}

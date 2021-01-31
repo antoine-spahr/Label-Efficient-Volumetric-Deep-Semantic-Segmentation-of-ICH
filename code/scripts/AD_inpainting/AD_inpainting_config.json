@@ -1,0 +1,46 @@
+{
+  "exp_name": "ADInpainting_31-12",
+  "path": {
+    "data": "../../../../../../mnt/data/ICH_data/publicSegICH2D/",
+    "output": "../../../outputs/ad_inpainting/"
+  },
+  "device": null,
+  "n_thread": 0,
+  "seed": 42,
+  "print_progress": true,
+  "data": {
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256,
+    "augmentation": {
+    }
+  },
+  "classifier_model_path": "../../../outputs/resnet/BinaryClassification_ResNet18_16-12/",
+  "classification_threshold": 0.25,
+  "inpainter_model_path": "../../../outputs/inpainting/SNPatchGAN_01-01_SA_50Ksamp/generator.pt",
+  "inpainter_cfg_path": "../../../outputs/inpainting/SNPatchGAN_01-01_SA_50Ksamp/config.json",
+  "model_param":{
+    "grid_hole": [32,32],
+    "grid_step": 8,
+    "inpainting_dilation_radius": [3, 5],
+    "cleaning_closing_radius": 1,
+    "cleaning_opening_radius": 1,
+    "n_iter": 20,
+    "alpha01": 0.0,
+    "alpha02": 3.0,
+    "alpha1": 1.0,
+    "alpha2": 1.5,
+    "use_wasserstein": false,
+    "grid_anomaly_inpaint": [[128, 128], null],
+    "shuffle_AD_mask_loader": false,
+    "batch_size": 64,
+    "early_stop": true,
+    "tol": 25
+  },
+  "robust_param":{
+    "angles_list": [-15, -7.5, 7.5, 15],
+    "flip": true,
+    "lower_frac": 0.45,
+    "upper_frac": 0.75
+  }
+}
