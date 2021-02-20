@@ -109,7 +109,8 @@ class SNPatchGAN:
         """
         logger = logging.getLogger()
         # make dataloader
-        loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+                                             shuffle=True, worker_init_fn=lambda _: np.random.seed())
         # make optimizers
         optimizer_g = optim.Adam(self.generator.parameters(), lr=self.lr_g, weight_decay=self.weight_decay, betas=(0.5, 0.999))
         optimizer_d = optim.Adam(self.discriminator.parameters(), lr=self.lr_d, weight_decay=self.weight_decay, betas=(0.5, 0.999))
@@ -195,7 +196,7 @@ class SNPatchGAN:
                 logger.info(f"| Epoch {epoch+1:03}/{self.n_epoch:03} | Batch {b+1:04}/{n_batch:04} "
                             f"| LossG {loss_g.item():.6f} -> L1 {loss_l1.item():.5f} +  GAN_G {loss_gan.item():.6f} "
                             f"| LossD {loss_d.item():.6f} -> L_real {loss_d_real.item():.6f} + L_fake {loss_d_fake.item():.6f} ")
-            
+
                 # print progress
                 # if self.print_progress:
                 #     print_progessbar(b, n_batch, Name='Training Batch', Size=40, erase=True)
@@ -259,7 +260,8 @@ class SNPatchGAN:
         """
         with torch.no_grad():
             # make loader
-            valid_loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
+            valid_loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+                                                       shuffle=False, worker_init_fn=lambda _: np.random.seed())
             n_batch = len(valid_loader)
             l1_loss_fn = DiscountedL1(gamma=self.gammaL1, reduction='mean', device=self.device)
 

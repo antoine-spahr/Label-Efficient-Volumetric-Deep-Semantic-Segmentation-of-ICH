@@ -98,7 +98,8 @@ class Contrastive:
         """
         logger = logging.getLogger()
         # initialize dataloader
-        loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, drop_last=True)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers,
+                                             drop_last=True, worker_init_fn=lambda _: np.random.seed())
         # initialize loss function
         loss_fn = self.loss_fn(**self.loss_fn_kwargs)
         # initialize otpitimizer
@@ -187,7 +188,8 @@ class Contrastive:
         if self.is_global:
             logger = logging.getLogger()
             # initiliatize Dataloader
-            loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
+            loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers,
+                                                 worker_init_fn=lambda _: np.random.seed())
             # Evaluate
             logger.info("Start Evaluating the network on global contrastive task.")
             start_time = time.time()

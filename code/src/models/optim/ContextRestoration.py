@@ -94,7 +94,7 @@ class ContextRestoration:
         logger = logging.getLogger()
         # make dataloader
         train_loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True,
-                                                   num_workers=self.num_workers)
+                                                   num_workers=self.num_workers, worker_init_fn=lambda _: np.random.seed())
         # put net on device
         self.net = self.net.to(self.device)
         # define optimizer
@@ -182,7 +182,8 @@ class ContextRestoration:
         """
         logger = logging.getLogger()
         # make loader
-        loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=False,
+                                             num_workers=self.num_workers, worker_init_fn=lambda _: np.random.seed())
         # put net on device
         self.net = self.net.to(self.device)
 
