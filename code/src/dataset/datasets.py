@@ -346,20 +346,25 @@ class RSNA_dataset(data.Dataset):
             |---- RSNA_dataset (torch.Dataset) the RSNA dataset.
         """
         super(RSNA_dataset, self).__init__()
-        self.data_df = data_df
+        self.data_df = data_df.copy()
         self.n_sample = len(data_df)
         self.data_path = data_path
         self.window = window
-        assert mode in ['standard', 'context_restoration', 'contrastive', 'binary_classification'], f"Invalid mode. Must be one of 'standard', 'context_restoration', 'contrastive', 'binary_classification'. Given : {mode}"
+        assert mode in ['standard', 'context_restoration', 'contrastive', 'binary_classification', 'multi_classification'], f"Invalid mode. Must be one of 'standard', 'context_restoration', 'contrastive', 'binary_classification'. Given : {mode}"
         self.mode = mode
 
-        self.transform = tf.Compose(tf.Resize(H=output_size, W=output_size), *augmentation_transform)#,
+        self.transform = tf.Compose(*augmentation_transform, tf.Resize(H=output_size, W=output_size))#,
                                     #tf.ToTorchTensor())
         self.toTensor = tf.ToTorchTensor()
         if mode == 'context_restoration':
             self.swap_tranform = tf.RandomPatchSwap(n=n_swap, w=swap_w, h=swap_h, rotate=swap_rot)
         elif mode == 'contrastive':
             self.contrastive_transform = tf.Compose(*contrastive_augmentation)
+        elif mode == 'multi_classification':
+            # add a columns 'no_Hemorrage'
+            self.data_df['no_Hemorrhage'] = 1 - self.data_df.Hemorrhage
+            # name of the classes
+            self.class_name = ['no_Hemorrhage', 'Hemorrhage', 'epidural', 'intraparenchymal', 'intraventricular', 'subarachnoid', 'subdural']
 
     def __len__(self):
         """
@@ -408,6 +413,11 @@ class RSNA_dataset(data.Dataset):
         elif self.mode == 'binary_classification':
             im = self.transform(im)
             label = self.data_df.iloc[idx].Hemorrhage
+            return self.toTensor(im), torch.tensor(label), torch.tensor(idx)
+        elif self.mode == 'multi_classification':
+            im = self.transform(im)
+            samp = self.data_df.iloc[idx]
+            label = [samp[name] for name in self.class_name]
             return self.toTensor(im), torch.tensor(label), torch.tensor(idx)
 
 class RSNA_Inpaint_dataset(data.Dataset):
