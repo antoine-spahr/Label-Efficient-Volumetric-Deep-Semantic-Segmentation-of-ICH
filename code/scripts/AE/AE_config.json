@@ -1,0 +1,62 @@
+{
+  "exp_name": "AE_01-03",
+  "path": {
+    "data": "../../../../../../mnt/data/ICH_data/RSNA/",
+    "output": "../../../outputs/inpainting/"
+  },
+  "device": "cuda:0",
+  "seed": 42,
+  "print_progress": true,
+  "dataset": {
+    "n_sample": 20010,
+    "n_sample_valid": 15,
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256,
+    "augmentation": {
+      "train": {
+        "Translate": {
+          "low": -0.1,
+          "high": 0.1
+        },
+        "Rotate": {
+          "low": -15,
+          "high": 15
+        },
+        "Scale": {
+          "low": 0.9,
+          "high": 1.1
+        },
+        "HFlip": {
+          "p": 0.5
+        }
+      },
+      "eval": {}
+    }
+  },
+  "net": {
+    "in_channels": 1,
+    "latent_channels": 64,
+    "bottelneck_channels": 64,
+    "n_conv": 3,
+    "bilinear": false
+  },
+  "train": {
+    "model_param":{
+      "n_epoch": 50,
+      "batch_size": 32,
+      "lr": 0.005,
+      "lr_scheduler": "ExponentialLR",
+      "lr_scheduler_kwargs": {
+        "gamma": 0.96
+      },
+      "lambda_GDL": {0: 0.0, 25: 1.0},
+      "weight_decay": 0.000001,
+      "num_workers": 8,
+      "checkpoint_freq": 1
+    },
+    "model_path_to_load": null,
+    "validate_epoch": true,
+    "valid_save_freq": 5
+  }
+}

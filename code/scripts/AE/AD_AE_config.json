@@ -1,0 +1,23 @@
+{
+  "exp_name": "AD_AE_02-03",
+  "path": {
+    "data": "../../../../../../mnt/data/ICH_data/publicSegICH2D/",
+    "output": "../../../outputs/ad_AE/"
+  },
+  "device": "cuda:0",
+  "seed": 42,
+  "print_progress": true,
+  "data": {
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256,
+    "augmentation": {
+    }
+  },
+  "classifier_model_path": "../../../outputs/resnet/BinaryClassification_ResNet18_16-12/",
+  "classification_threshold": 0.25,
+  "ae_model_path": "../../../outputs/.../AE.pt",
+  "ae_cfg_path": "../../../outputs/.../config.json",
+  "alpha_low": 1.5,
+  "alpha_high": 3.0
+}
