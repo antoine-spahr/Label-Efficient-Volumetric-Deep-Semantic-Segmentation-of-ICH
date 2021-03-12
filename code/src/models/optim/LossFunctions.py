@@ -15,7 +15,7 @@ class BinaryDiceLoss(nn.Module):
     """
     Pytorch Module defining the Dice Loss for the Binary Segmentation Case.
     """
-    def __init__(self, reduction='mean', p=2, alpha=1.0):
+    def __init__(self, reduction='mean', p=2, alpha=1.0, eps=1):
         """
         Build a Binary Dice Loss Module.
         ----------
@@ -25,6 +25,7 @@ class BinaryDiceLoss(nn.Module):
             |           sigmoid as prediction, a higher power will enforce the network to increase the prediction for
             |           positive pixels.
             |---- alpha (float) the weight of prediction for ground truth without positive (Prediction's loss reduced if alpha < 1.0)
+            |---- eps (float) epsilon for numerical stability of division.
         OUTPUT
             |---- BinaryDiceLoss (nn.Module) the Loss module.
         """
@@ -33,7 +34,7 @@ class BinaryDiceLoss(nn.Module):
         self.reduction = reduction
         self.p = p
         self.alpha = alpha
-        self.eps = 1 # for stability when mask and predictions are empty
+        self.eps = eps # for stability when mask and predictions are empty
 
     def forward(self, pred, mask):
         """
@@ -406,3 +407,64 @@ class DiscountedL1(nn.Module):
             dist_mask.append(msk.view(1,1,*msk.shape))
 
         return torch.cat(dist_mask, dim=0)
+
+class GDL(nn.Module):
+    """
+
+    """
+    def __init__(self, reduction='mean', channels=1, device='cuda'):
+        """
+
+        """
+        super(GDL, self).__init__()
+        assert reduction in ['none', 'mean', 'sum'], f"Reduction startegy not supported. Must be one of ['none', 'mean', 'sum']. Given {reduction}."
+        self.reduction = reduction
+
+        self.w_h = torch.tensor([[[[0,  0, 0],
+                                   [-1, 1, 0],
+                                   [0,  0, 0]]]], device=device).float().repeat(1,channels,1,1)
+
+        self.w_v = torch.tensor([[[[0, -1, 0],
+                                   [0,  1, 0],
+                                   [0,  0, 0]]]], device=device).float().repeat(1,channels,1,1)
+
+    def forward(self, im, rec):
+        """
+
+        """
+        im_gradH = torch.abs(nn.functional.conv2d(im, self.w_h, padding=1))
+        im_gradV = torch.abs(nn.functional.conv2d(im, self.w_v, padding=1))
+        rec_gradH = torch.abs(nn.functional.conv2d(rec, self.w_h, padding=1))
+        rec_gradV = torch.abs(nn.functional.conv2d(rec, self.w_v, padding=1))
+
+        loss = torch.abs(im_gradH - rec_gradH) + torch.abs(im_gradV - rec_gradV)
+        loss = loss.sum(dim=[1,2,3])
+
+        if self.reduction == 'none':
+            return loss
+        elif self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+
+class HSCLoss(nn.Module):
+    """  """
+    def __init__(self, reduction='mean'):
+        """  """
+        super().__init__()
+        assert reduction in ['none', 'mean'], f"Reduction mode not supported. Must be either 'none' or 'mean'. Given '{reduction}'."
+        self.reduction = reduction
+
+    def forward(self, x, y):
+        """
+        y = label ; y=0 -> normal ; y=1 -> anomaly
+        """
+        # Pseudo Hubert loss
+        Ax = torch.sqrt(x**2 + 1) - 1
+        Ax = Ax.reshape(x.shape[0], -1).mean(-1) # mean over output feature map (batch wise)
+        loss = torch.where(y == 1, -torch.log(1 - torch.exp(-Ax) + 1e-31), Ax)
+
+        if self.reduction == 'none':
+            return loss
+        elif self.reduction == 'mean':
+            return loss.mean()

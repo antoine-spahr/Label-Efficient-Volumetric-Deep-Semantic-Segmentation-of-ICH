@@ -1,0 +1,32 @@
+{
+  "exp_name": "FCDD_eval_08-03",
+  "path": {
+    "data": "../../../data/publicSegICH2D/",
+    "data_server": "../../../../../../mnt/data/ICH_data/publicSegICH2D/",
+    "output": "../../../outputs/FCDD_eval/"
+  },
+  "device": "cpu",
+  "batch_size": 4,
+  "num_workers": 0,
+  "seed": 42,
+  "print_progress": true,
+  "data": {
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256,
+    "augmentation": {
+    }
+  },
+  "classifier_model_path": "../../../outputs/resnet/BinaryClassification_ResNet18_16-12/",
+  "classification_threshold": 0.25,
+  "fcdd_model_path": "../../../outputs/FCDD/FCDD_05-03/FCDD.pt",
+  "fcdd_cfg_path": "../../../outputs/FCDD/FCDD_05-03/config.json",
+  "heatmap_threshold": 0.5,
+  "heatmap_param":{
+    "reception": true,
+    "std": null,
+    "cpu": true,
+    "q_min": 0.025,
+    "q_max": 0.999
+  }
+}

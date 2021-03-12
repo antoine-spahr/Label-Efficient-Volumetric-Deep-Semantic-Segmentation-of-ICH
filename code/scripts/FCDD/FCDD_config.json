@@ -1,0 +1,77 @@
+{
+  "exp_name": "FCDD_01-03",
+  "path": {
+    "data": "../../../../../../mnt/data/ICH_data/RSNA/",
+    "output": "../../../outputs/FCDD/"
+  },
+  "device": "cuda:0",
+  "seed": 42,
+  "print_progress": true,
+  "dataset": {
+    "n_normal": 20000,
+    "n_abnormal": 1000,
+    "n_normal_valid": 250,
+    "n_abnormal_valid": 250,
+    "artificial_anomaly": true,
+    "artificial_anomaly_valid": false,
+    "anomaly_proba": 0.5,
+    "win_center": 50,
+    "win_width": 200,
+    "size": 256,
+    "augmentation": {
+      "train": {
+        "Translate": {
+          "low": -0.1,
+          "high": 0.1
+        },
+        "Rotate": {
+          "low": -15,
+          "high": 15
+        },
+        "Scale": {
+          "low": 0.9,
+          "high": 1.1
+        },
+        "HFlip": {
+          "p": 0.5
+        }
+      },
+      "eval": {}
+    },
+    "drawing_params": {
+      "n_ellipse": [1, 5],
+      "major_axis": [20, 50],
+      "minor_axis": [10, 25],
+      "rotation": [0, 6.28],
+      "intensity": [0.5, 1],
+      "noise": 0.05
+    }
+  },
+  "net": {
+    "in_channels": 1,
+    "bias": true
+  },
+  "train": {
+    "model_param":{
+      "n_epoch": 100,
+      "batch_size": 32,
+      "lr": 0.005,
+      "lr_scheduler": "ExponentialLR",
+      "lr_scheduler_kwargs": {
+        "gamma": 0.96
+      },
+      "weight_decay": 0.000001,
+      "num_workers": 8,
+      "checkpoint_freq": 5
+    },
+    "model_path_to_load": null,
+    "validate_epoch": true,
+    "heatmap_param":{
+      "reception": true,
+      "std": null,
+      "cpu": true,
+      "q_min": 0.025,
+      "q_max": 0.999
+    }
+  }
+}

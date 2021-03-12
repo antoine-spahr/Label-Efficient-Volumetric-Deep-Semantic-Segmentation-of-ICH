@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 import skimage.io as io
 import skimage.transform
+import skimage.draw
 import skimage
 import cv2
 import torch
@@ -598,6 +599,124 @@ class ImgMaskDataset(data.Dataset):
         im, mask = self.transform(im, mask)
 
         return im, mask, torch.tensor(idx)
+
+class RSNA_FCDD_dataset(data.Dataset):
+    """  """
+    def __init__(self, data_df, data_path, artificial_anomaly=True, anomaly_proba=0.5,
+                 augmentation_transform=[tf.Translate(low=-0.1, high=0.1), tf.Rotate(low=-10, high=10),
+                                         tf.Scale(low=0.9, high=1.1), tf.HFlip(p=0.5)],
+                 window=None, output_size=256,
+                 drawing_params=dict(n_ellipse=(1,10), major_axis=(1,25), minor_axis=(1,25),
+                                     rotation=(0,2*np.pi), intensity=(0.1, 1), noise=None)):
+        """
+        Build a dataset for the RSNA dataset for FCDD training.
+        ----------
+        INPUT
+            |---- data_df (pd.DataFrame) the input dataframe of samples. Each row must contains a filename and a columns
+            |           Hemorrhage specifying if slice has or not an hemorrhage.
+            |---- data_path (str) path to the root of the dataset folder (until where the samples' filnames begins).
+            |---- artificial_anomaly (bool) whether to generate anomalies with drawing of ellipse on top of image. If False,
+            |           the dataset will return labled hemorrhagous as anomalies.
+            |---- anomaly_proba (float in [0.0,1.0]) the probability to geenrate an artificial anomaly. Ignored if
+            |           artificial_anomaly is False.
+            |---- augmentation_transform (list of transofrom) data augmentation transformation to apply.
+            |---- window (tuple (center, width)) the window for CT intensity rescaling. If None, no windowing is performed.
+            |---- output_size (int) the dimension of the output (H = W).
+            |---- drawing_params (dict) the parameters to be passed to the ellipse drawing method.
+        OUTPUT
+            |---- RSNA_FCDD_dataset (data.Dataset)
+        """
+        super().__init__()
+        assert 0.0 <= anomaly_proba <= 1.0, f"Probability of anomaly must be in [0.0 , 1.0]. Given {anomaly_proba}."
+        self.data_df = data_df
+        self.data_path = data_path
+        self.artificial_anomaly = artificial_anomaly
+        self.anomaly_proba = anomaly_proba
+        self.window = window
+
+        self.transform = tf.Compose(*augmentation_transform,
+                                    tf.Resize(H=output_size, W=output_size),
+                                    tf.ToTorchTensor())
+
+        self.drawing_params = drawing_params
+
+    def __len__(self):
+        """
+        eturn the number of samples in the dataset.
+        ----------
+        INPUT
+            |---- None
+        OUTPUT
+            |---- N (int) the number of samples in the dataset.
+        """
+        return len(self.data_df)
+
+    def __getitem__(self, idx):
+        """
+        Extract the CT sepcified by idx.
+        ----------
+        INPUT
+            |---- idx (int) the sample index in self.data_df.
+        OUTPUT
+            |---- im (torch.tensor) the CT image with dimension (1 x H x W).
+            |---- mask (torch.tensor) the inpaining mask with dimension (1 x H x W).
+        """
+        # load dicom and recover the CT pixel values
+        dcm_im = pydicom.dcmread(self.data_path + self.data_df.iloc[idx].filename)
+        im = (dcm_im.pixel_array * float(dcm_im.RescaleSlope) + float(dcm_im.RescaleIntercept))
+        # Window the CT-scan
+        if self.window:
+            im = window_ct(im, win_center=self.window[0], win_width=self.window[1], out_range=(0,1))
+        # transform image
+        im = self.transform(im)
+        label = self.data_df.iloc[idx].Hemorrhage
+
+        if self.artificial_anomaly and (np.random.rand() < self.anomaly_proba) and (label == 0):
+            # get a mask
+            anomalies = tf.ToTorchTensor()(self.draw_ellipses((im.shape[1], im.shape[2]), **self.drawing_params))
+            im = torch.where(anomalies > 0, anomalies, im)
+            label = 1
+
+        return im, torch.tensor(label), torch.tensor(idx)
+
+    @staticmethod
+    def draw_ellipses(im_shape, n_ellipse=(1,10), major_axis=(1,25), minor_axis=(1,25), rotation=(0,2*np.pi),
+                      intensity=(0.1, 1), noise=None):
+        """
+        Draw mltiple ellipses with randomly samples parametrers and intensity.
+        ----------
+        INPUT
+            |---- im_shape (tuple) shape of the image to generate.
+            |---- n_ellipse (2-tuple low,high) the range to sample the number of ellipse from.
+            |---- major_axis (2-tuple low,high) the range to sample the major_axis of ellipse from.
+            |---- minor_axis (2-tuple low,high) the range to sample the minor axis of ellipse from.
+            |---- rotation (2-tuple low,high) the range to sample the angle of ellipse from (in radian).
+            |---- intensity (2-tuple low,high) the range to sample the pixel intensity of ellipse from.
+            |---- noise (float) whether to add gaussian noise to the elipse value. If None, no noise is added.
+        OUTPUT
+            |---- out (np.array) the grayscale image with a random set of ellipse drawn.
+        """
+        h, w = im_shape
+        out = np.zeros(im_shape)
+        # generate a random number of ellipses
+        for _ in range(np.random.randint(low=n_ellipse[0], high=n_ellipse[1])):
+            # get center
+            r, c = int(np.random.normal(w/2, w/6)), int(np.random.normal(h/2, h/6))
+            # get major/minor axis
+            max_ax = np.random.uniform(low=major_axis[0], high=major_axis[1])
+            min_ax = np.random.uniform(low=minor_axis[0], high=min(minor_axis[1], max_ax))
+            # get angle
+            rot = np.random.uniform(low=rotation[0], high=rotation[1])
+            # compute ellipse coordinates
+            rr, cc = skimage.draw.ellipse(r, c, min_ax, max_ax, shape=im_shape, rotation=rot)
+            # draw ellipse with or without noise
+            if noise:
+                gs_val = np.random.uniform(low=intensity[0], high=intensity[1])
+                out[rr, cc] = np.clip(np.random.normal(gs_val, noise, size=len(rr)), 0.0, 1.0)
+            else:
+                out[rr, cc] = np.random.uniform(low=intensity[0], high=intensity[1])
+
+        return out
 
 
 #%%
