@@ -144,6 +144,7 @@ class BinaryClassifier:
                 optimizer.zero_grad()
                 # optimize the weights with backpropagation on the batch
                 pred = self.net(input)
+                pred = nn.functional.softmax(pred, dim=1)
                 loss = loss_fn(pred, label)
                 loss.backward()
                 optimizer.step()
@@ -455,6 +456,7 @@ class MultiClassifier:
                 optimizer.zero_grad()
                 # optimize the weights with backpropagation on the batch
                 pred = self.net(input)
+                pred = torch.sigmoid(input)
                 loss = loss_fn(pred, label)
                 loss.backward()
                 optimizer.step()

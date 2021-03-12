@@ -117,10 +117,15 @@ def main(config_path):
 
     # Make Model
     cfg.SSL.train.model_param.lr_scheduler = getattr(torch.optim.lr_scheduler, cfg.SSL.train.model_param.lr_scheduler) # convert scheduler name to scheduler class object
-    cfg.SSL.train.model_param.loss_fn = getattr(torch.nn, cfg.SSL.train.model_param.loss_fn) # convert loss_fn name to nn.Module class object
-    df_rsna['no_Hemorrhage'] = 1 - df_rsna.Hemorrhage
-    class_weight_list = ((len(df_rsna) - df_rsna[train_RSNA_dataset.class_name].sum()) / df_rsna[train_RSNA_dataset.class_name].sum()).values # define CE weighting from train dataset
-    cfg.SSL.train.model_param.loss_fn_kwargs['pos_weight'] = torch.tensor(class_weight_list, device=cfg.device) # add weighting to CE kwargs
+    if cfg.SSL.train.model_param.loss_fn == 'BCEWithLogitsLoss':
+        df_rsna['no_Hemorrhage'] = 1 - df_rsna.Hemorrhage
+        class_weight_list = ((len(df_rsna) - df_rsna[train_RSNA_dataset.class_name].sum()) / df_rsna[train_RSNA_dataset.class_name].sum()).values # define CE weighting from train dataset
+        cfg.SSL.train.model_param.loss_fn_kwargs['pos_weight'] = torch.tensor(class_weight_list, device=cfg.device) # add weighting to CE kwargs
+    try:
+        cfg.SSL.train.model_param.loss_fn = getattr(torch.nn, cfg.SSL.train.model_param.loss_fn) # convert loss_fn name to nn.Module class object
+    except AttributeError:
+        cfg.SSL.train.model_param.loss_fn = getattr(src.models.optim.LossFunctions, cfg.SSL.train.model_param.loss_fn)
+
     #torch.tensor([1 - w_ICH, w_ICH], device=cfg.device).float()
 
     classifier = MultiClassifier(net_ssl, device=cfg.device, print_progress=cfg.print_progress, **cfg.SSL.train.model_param)
